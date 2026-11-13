@@ -46,10 +46,6 @@ path = 'ui_hot_reload.dll'
 path = 'ac6_toast.dll'
 """
 
-INI = """# The me3 package whose menu files are watched (relative to this file).
-package = mod
-"""
-
 LAUNCH = """@echo off
 cd /d "%~dp0"
 me3 launch -p gfx-reloader-test.me3
@@ -107,8 +103,7 @@ def main():
     shutil.copyfile(stock, os.path.join(KIT, 'colored', '01_000_fe_stock.gfx'))
     for name, (color, add) in COLORS.items():
         make_hud(color, add, os.path.join(KIT, 'colored', f'01_000_fe_{name}.gfx'))
-    for name, text in (('gfx-reloader-test.me3', PROFILE), ('ui_hot_reload.ini', INI), ('launch.bat', LAUNCH),
-                       ('README.txt', README)):
+    for name, text in (('gfx-reloader-test.me3', PROFILE), ('launch.bat', LAUNCH), ('README.txt', README)):
         newline = '\r\n' if name.endswith(('.bat', '.txt')) else '\n'
         with open(os.path.join(KIT, name), 'w', encoding='utf-8', newline=newline) as f:
             f.write(text)

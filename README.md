@@ -6,17 +6,19 @@ For game version 1.09.1, with [me3](https://github.com/garyttierney/me3).
 
 ## Setup
 
-1. Add `ui_hot_reload.dll` to your me3 profile as a native:
+1. Put `ui_hot_reload.dll` next to your mod's package folder, named `mod` (the folder that contains `menu\`), and
+   add it to your me3 profile as a native:
    ```toml
    [[natives]]
-   path = 'path\to\ui_hot_reload.dll'
+   path = 'ui_hot_reload.dll'
    ```
-2. Put `ui_hot_reload.ini` next to the DLL and point it at your me3 package (the folder that contains `menu\`;
-   a relative path is relative to the ini's folder):
-   ```ini
-   package = C:\path\to\your\mod
-   ```
-3. Start the game through me3 as usual.
+2. Start the game through me3 as usual.
+
+If your package isn't a `mod` folder next to the DLL, put a `ui_hot_reload.ini` next to the DLL that points at it
+(a relative path is relative to the ini's folder):
+```ini
+package = C:\path\to\your\package
+```
 
 ## Use
 

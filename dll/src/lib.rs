@@ -49,10 +49,19 @@ pub fn toast(text: &str) {
     ac6_toast_client::show(text, TOAST_SECONDS);
 }
 
-/// `package = <folder>` from ui_hot_reload.ini, next to the DLL or in one of its parent folders.
+/// The package folder to watch: `package = <folder>` from ui_hot_reload.ini (next to the DLL or in one of its parent
+/// folders), else the `mod` folder next to the DLL.
 fn package_from_config(dll: &Path) -> Option<PathBuf> {
     let Some(ini) = dll.ancestors().skip(1).map(|d| d.join("ui_hot_reload.ini")).find(|p| p.is_file()) else {
-        log("no ui_hot_reload.ini found next to the DLL (or in a folder above it); F7/F8 do nothing");
+        // no ini: the usual mod layout, a `mod` package folder next to the DLL
+        let default = dll.parent().unwrap_or(Path::new(".")).join("mod");
+        if default.is_dir() {
+            return Some(default);
+        }
+        log(&format!(
+            "no mod folder next to the DLL ({}) and no ui_hot_reload.ini pointing elsewhere; F7/F8 do nothing",
+            default.display()
+        ));
         return None;
     };
     let text = std::fs::read_to_string(&ini).unwrap_or_default();
