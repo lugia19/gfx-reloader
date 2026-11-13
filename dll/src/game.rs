@@ -60,8 +60,6 @@ pub const PANEL_CLOSE: usize = 0x140c8aff0;
 pub const PANEL_CLOSE_PROLOGUE: [u8; 8] = [0x40, 0x57, 0x48, 0x83, 0xec, 0x30, 0x48, 0x8b];
 pub const PANEL_NAME: usize = 0x50;
 pub const PANEL_PLAYER: usize = 0x60;
-/// Panels whose owners survive mission loads (closed only when returning to the title screen).
-pub const PERSISTENT_PANELS: [&str; 2] = ["01_MenuCommonBG", "02_OnlineArena_CommonBG"];
 
 // ---- helpers --------------------------------------------------------------------------------------------------------
 

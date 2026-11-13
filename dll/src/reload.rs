@@ -52,11 +52,9 @@ struct Round {
     first_window: usize,
     started: Instant,
     waiting: Vec<Waiting>,
-    /// For the summary toast: menus handled, how many only as a panel preview, and whether one of those is a panel
-    /// that only the title screen rebuilds.
+    /// For the summary toast: menus handled, and how many of them only as a panel preview.
     menus: usize,
     previews: usize,
-    persistent_preview: bool,
 }
 
 pub fn request(names: Vec<String>) {
@@ -83,8 +81,7 @@ fn round_summary(round: &Round) -> String {
     if round.previews == 0 {
         return format!("Reloaded {menus}");
     }
-    let until = if round.persistent_preview { "you return to the title screen" } else { "the next scene change" };
-    format!("Reloaded {menus} ({} preview only, broken until {until})", round.previews)
+    format!("Reloaded {menus} ({} preview only, broken until the next scene change)", round.previews)
 }
 
 /// F9, game thread: every menu movie on screen, panels marked, packed into numbered one-line toasts.
@@ -176,13 +173,9 @@ unsafe fn next_reload(window: usize) -> Option<String> {
             waiting: Vec::new(),
             menus: 0,
             previews: 0,
-            persistent_preview: false,
         });
         current.menus += new.len();
-        for menu in new.iter().filter(|m| m.previewed) {
-            current.previews += 1;
-            current.persistent_preview |= PERSISTENT_PANELS.iter().any(|p| p.eq_ignore_ascii_case(&menu.name));
-        }
+        current.previews += new.iter().filter(|m| m.previewed).count();
         current.waiting.extend(new);
     }
     let Some(current) = round.as_mut() else {
@@ -281,14 +274,9 @@ unsafe fn reload_panels(name: &str) -> bool {
         unsafe { original(&ORIG_PANEL_CLOSE)(*panel, 0, 0, 0) };
         unsafe { original(&ORIG_PANEL_OPEN)(*panel, 0, 0, 0) };
     }
-    let rebuilt_by = if PERSISTENT_PANELS.iter().any(|p| p.eq_ignore_ascii_case(name)) {
-        "returning to the title screen"
-    } else {
-        "the next scene change (entering or leaving a mission or AC TEST)"
-    };
     log(&format!(
         "{name}: panel reloaded as a PREVIEW: new shapes and colors, but its text, data and input stay with the old \
-         movie until it's rebuilt by {rebuilt_by}"
+         movie until the game rebuilds it (usually the next scene change: entering or leaving a mission or AC TEST)"
     ));
     true
 }
