@@ -1,6 +1,6 @@
-//! ui-hot-reload probe (Armored Core VI 1.09.1, stock exe, me3 0.13.0). First version of the UI hot reload tool:
-//! it reloads edited menu movies and logs enough to see which menus actually show the new movie. Background:
-//! ..\..\HANDOFF.md and AC6_Projects\hud-color\notes.md.
+//! ui-hot-reload research probe (Armored Core VI 1.09.1, stock exe, me3 0.13.0): the first version of the tool, kept
+//! for research. It reloads edited menu movies and logs enough to see what the game does with them. Findings:
+//! ..\..\docs\research-notes.md.
 //!
 //! How a reload works: the disk fallback patch (6 NOPs over the `jnz` at 0x1415f427d) makes the game's Scaleform
 //! OpenFile read a file from disk when it isn't in the in-memory file repository (after boot, none are). Releasing
@@ -909,7 +909,8 @@ fn load_config(dll_path: &Path) -> Config {
         }
         let Some((key, value)) = line.split_once('=') else { continue };
         match key.trim() {
-            "package" => config.package = Some(PathBuf::from(value.trim())),
+            // a relative path is relative to the ini's folder
+            "package" => config.package = Some(file.parent().unwrap_or(Path::new(".")).join(value.trim())),
             "disk_fallback" => config.fallback_at_boot = value.trim().eq_ignore_ascii_case("boot"),
             _ => {}
         }

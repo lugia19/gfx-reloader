@@ -2,27 +2,11 @@
 
 Everything found while building the tool, in the order it was found. Short version: [how-it-works.md](how-it-works.md).
 
-Goal: edit a menu `.gfx` in an me3 package, press a key, and the game uses the edited movie the next time the menu
-opens, without restarting. Background in `HANDOFF.md` and `..\hud-color\notes.md`. AC6 1.09.1, me3 0.13.0.
-
-Current state (2026-11-13): **probe version**. It does the reload and logs enough to answer the open questions.
-
-## Pieces
-
-- `dll\`: the probe DLL (`cargo +stable build --release`). Hooks the movie lookup, menu open (`0x1416069a0`,
-  logs whether the menu's player was reused or new), loader, CreateMovie (flags an unchanged MovieDef = Scaleform's
-  library cache), OpenFile (repository / disk / FAILED), file requests and Scaleform's own log. Log:
-  `Game\debug-logs\ui_hot_reload.log`.
-  - F7: release the movies of package files changed since the last F7 (or launch); turns the disk fallback on.
-  - F8: release every cached movie. F9: dump the movie cache, player map and active list. F11: toggle the fallback.
-  - Releases and dumps run at the next movie lookup (game thread), so they happen when some menu opens.
-- `ui_hot_reload.ini`: `package` (watched `menu\` folder), `disk_fallback = boot | on_reload`.
-- `tests\mod\menu\`: every stock menu movie (111 + `win\02_textinput.gfx`), so any of them can be edited mid-session
-  (me3 only serves files that existed at launch). Note: me3 overriding `02_coloring.gfx` breaks the Paint pattern
-  thumbnails (`Research\paint-gfx-path`); unrelated to the reload.
-- `tools\tint.py <menu> [RRGGBB]` / `--restore`: writes a tinted copy of the stock movie into the test package (RGB
-  multiply on every placed object), for an obvious "did it reload" check.
-- Launch: `me3\ui-hot-reload.me3` / `launch-ui-hot-reload.bat` (alt save `UiHotReload.sl2`).
+Goal: edit a menu `.gfx` in an me3 package, press a key, and the game uses the edited movie without restarting.
+Starting point: `AC6_Projects\hud-color\notes.md` (how menu movies load, the file repository, the disk fallback).
+AC6 1.09.1, me3 0.13.0. Most of this was found with the research probe (`probe-dll\`, see
+[development.md](development.md)); "the probe" below means it. Note: me3 overriding `02_coloring.gfx` breaks the Paint
+pattern thumbnails (`AC6_tools\Research\paint-gfx-path`), unrelated to the reload.
 
 ## What the code says about players (Ghidra, 2026-11-13)
 
@@ -88,7 +72,7 @@ Current state (2026-11-13): **probe version**. It does the reload and logs enoug
 - `CSMenuMan` (`[0x144e15530]`, vtable `0x1438f2e88`) matches ER's `CSMenuManImp` (fromsoftware-rs): `ui_states`
   bytes at `+0x30` (bit 0 created, bit 1 visible; window open sets bit 0, close clears it), a per-name open-window
   count map at `+0x98`.
-- `tools\find_window.py <menu>` finds a menu's window in the running game (scans for the player pointer from the log).
+- `probe-dll\tools\find_window.py <menu>` finds a menu's window in the running game (scans for the player pointer from the log).
 - Break test F10 (close every active player): menus vanish (the active list is the draw list), their windows keep
   running blind, nothing reopens; pause menu dead. Not a reload path.
 - The player map (`system+0x9d8`) only holds resident == 2 menus; ordinary menus get a new player on every open (so
@@ -148,7 +132,7 @@ all normal (run B); the three-menu reload above also ran with Arxan on.
 
 ## Debug registers and Arxan (2026-11-13)
 
-- The probe's F5 arms a 1-byte write watchpoint (`dll\src\watch.rs`) on `CSMenuMan+0x10` and installs the
+- The probe's F5 arms a 1-byte write watchpoint (`probe-dll\src\watch.rs`) on `CSMenuMan+0x10` and installs the
   exception handler that logs the writers. It used to fail on every thread: windows-sys 0.59 declares the x86-64
   `CONTEXT` without `align(16)`, so the stack copy was misaligned and Get/SetThreadContext failed. Fixed with an
   aligned wrapper; now arms on all threads (142/142, checked from outside too). (The Steam overlay hooks
@@ -159,24 +143,19 @@ all normal (run B); the three-menu reload above also ran with Arxan on.
 - With me3 `--disable-arxan`: armed on all threads for 5+ minutes through a sortie, no crash. Runtime debugging
   needs that option; results must still be re-checked with Arxan on.
 
-## Next
+## Final checks (2026-11-13)
 
-(Done 2026-11-13: the tool is in `dll\`, the probe moved to `probe-dll\`; README rewritten for modders. Tested with
-Arxan on: F7 with a live menu, a panel and a menu not on screen; the F8 watcher; and the HUD reloaded live during
-AC TEST, still fully working, back to the garage normally.)
-(Done 2026-11-13: `disk_fallback = boot` is safe: all 109 boot files still come from the repository, the one
-file-less entry `02_gaitemstatus_general_minimum` takes the disk path and fails cleanly as before, garage / Assembly /
-AC TEST normal, Arxan on. `05_termofservice` wasn't requested that boot. The tool can patch at load. AC TEST goes
-through the real sortie path (`02_NowLoading_Sortie`, HUD built the same way), so it stands in for a sortie; a story
-mission would only add cutscene / comms windows.)
-4. **Separate session: how `01_SystemToast` is driven.** Known: CSMenuMan builds its window at startup
-   (`0x14101b770`, called via `0x140cce4e0` from `0x140cd2e70` / `0x140cd4290`; layer 0x1e; factory `0x1439c0bf0`).
-   To find: the controller the factory builds, its update, the message queue it plays (ER's CSMenuManImp has a
-   `FeSystemAnnounceViewModel` with a queue; fromsoftware-rs `crates/eldenring/src/cs/menu_man.rs`), and who pushes
-   into it, i.e. which events show a toast; maybe trigger one. (Done 2026-11-13 in its own project,
-   `AC6_Projects\system-toast\notes.md`.)
-(Done 2026-11-13: the second close check `0x140d626f0` is `xor eax,eax; ret`, a "never close" default installed by a
-generic window-job constructor (around `0x140d619f0`); all seven persistent windows carry it.)
+- Patching the disk fallback at load is safe: all 109 boot files still come from the repository, the one file-less
+  entry `02_gaitemstatus_general_minimum` takes the disk path and fails cleanly as before; garage, Assembly and AC TEST
+  normal (Arxan on). `05_termofservice` wasn't requested that boot.
+- AC TEST goes through the real sortie path (`02_NowLoading_Sortie`, HUD built the same way), so it stands in for a
+  sortie; a story mission would only add cutscene / comms windows (not checked).
+- The second close check `0x140d626f0` is `xor eax,eax; ret`: a "never close" default installed by a generic
+  window-job constructor (around `0x140d619f0`); all seven persistent windows carry it.
+- The finished tool, tested with Arxan on: F7 with a live menu, a panel and a menu not on screen; the F8 watcher; the
+  HUD reloaded live during AC TEST (still fully working, back to the garage normally); F9 and the toasts; the test kit
+  from a fresh unzip.
+- `01_SystemToast` (how toasts are driven) was worked out in its own project, AC6-Toast-Wrapper (`system-toast`).
 
 ## Planned: Elden Ring support
 
@@ -185,11 +164,3 @@ offsets in a per-game table, shared logic unchanged), together with AC6-Toast-Wr
 project with RTTI (`AC6_tools\Research\exe_re_er\ghidra\ER.gpr`); ER names already matched: `CS::CSScaleformSystem`
 (movie cache map at +0x9b0 in ER, +0x9b8 in AC6), `CS::CSScaleformFileOpener`, `CSMenuManImp` (fromsoftware-rs
 `crates/eldenring/src/cs/menu_man.rs`); me3's ER profile. Debug with `--disable-arxan`, test with it on.
-
-## Test plan for the probe
-
-1. Launch, load into the garage, open the menus to test once (baseline lines in the log).
-2. `python -I tools\tint.py <menu>`, F7, close and reopen that menu. Green or not? Repeat for a few menus, and the
-   HUD (`01_000_fe`, then sortie).
-3. F9, open any menu: dump of cache / players / active list.
-4. Separate session with `disk_fallback = boot`: does boot still work (and what do the boot misses do in the log)?
