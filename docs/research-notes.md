@@ -178,6 +178,14 @@ mission would only add cutscene / comms windows.)
 (Done 2026-11-13: the second close check `0x140d626f0` is `xor eax,eax; ret`, a "never close" default installed by a
 generic window-job constructor (around `0x140d619f0`); all seven persistent windows carry it.)
 
+## Planned: Elden Ring support
+
+Make gfx-reloader support both AC6 and Elden Ring in one DLL (game detected at load, game-specific addresses and
+offsets in a per-game table, shared logic unchanged), together with AC6-Toast-Wrapper. Starting points: the ER Ghidra
+project with RTTI (`AC6_tools\Research\exe_re_er\ghidra\ER.gpr`); ER names already matched: `CS::CSScaleformSystem`
+(movie cache map at +0x9b0 in ER, +0x9b8 in AC6), `CS::CSScaleformFileOpener`, `CSMenuManImp` (fromsoftware-rs
+`crates/eldenring/src/cs/menu_man.rs`); me3's ER profile. Debug with `--disable-arxan`, test with it on.
+
 ## Test plan for the probe
 
 1. Launch, load into the garage, open the menus to test once (baseline lines in the log).
