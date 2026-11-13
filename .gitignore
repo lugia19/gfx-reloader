@@ -1,0 +1,4 @@
+target/
+__pycache__/
+# stock game files (fill with tools/make_test_package.py)
+tests/mod/menu/
