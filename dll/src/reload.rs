@@ -2,8 +2,8 @@
 //! thread, inside the self-owned windows' step (called every frame for every live window).
 //!
 //! Per requested menu:
-//! 1. its cached movie is released and any leftover repository entry for its file is dropped, so the next load reads
-//!    the file from disk;
+//! 1. its cached movie is released (AC6: and any leftover repository entry for its file is dropped), so the next load
+//!    reads the file from disk;
 //! 2. live embedded panels with that movie are closed and reopened (new art, but their owner keeps talking to the old
 //!    movie: preview only);
 //! 3. a live self-owned window with that movie is closed with its own close and reopened by its step in the same
@@ -19,13 +19,14 @@ use crate::game::*;
 use crate::{TOAST_LINE, log, toast};
 
 type WindowFn = unsafe extern "system" fn(usize, usize, usize, usize) -> usize;
+type PlayerCloseFn = unsafe extern "system" fn(usize, usize) -> usize;
 type RepositoryLookupFn = unsafe extern "system" fn(usize, *const u16) -> usize;
 type RepositoryReleaseFn = unsafe extern "system" fn(usize, usize) -> usize;
 type MenuPathFn = unsafe extern "system" fn(*mut u8, usize) -> usize;
 
 pub static ORIG_WINDOW_STEP: AtomicUsize = AtomicUsize::new(0);
 pub static ORIG_PANEL_OPEN: AtomicUsize = AtomicUsize::new(0);
-pub static ORIG_PANEL_CLOSE: AtomicUsize = AtomicUsize::new(0);
+pub static ORIG_PLAYER_CLOSE: AtomicUsize = AtomicUsize::new(0);
 
 /// Set while there are requests or menus waiting for their window, so the per-frame hook does nothing otherwise.
 static PENDING: AtomicBool = AtomicBool::new(false);
@@ -35,8 +36,15 @@ static LIST_REQUESTED: AtomicBool = AtomicBool::new(false);
 static REQUESTS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 /// Menus waiting for their live self-owned window to step, until every live window has had its step.
 static ROUND: Mutex<Option<Round>> = Mutex::new(None);
-/// Live embedded panels: (panel window, menu name), kept by the panel open/close hooks.
-static PANELS: Mutex<Vec<(usize, String)>> = Mutex::new(Vec::new());
+/// Live embedded panels, added when a panel opens and dropped when its player closes (every panel close, and every
+/// panel destruction, goes through the player close; Elden Ring has no separate panel close to hook).
+static PANELS: Mutex<Vec<Panel>> = Mutex::new(Vec::new());
+
+struct Panel {
+    panel: usize,
+    player: usize,
+    name: String,
+}
 
 /// Only in case the round's first window closes and never steps again.
 const ROUND_SAFETY_CAP: Duration = Duration::from_secs(2);
@@ -86,7 +94,7 @@ fn round_summary(round: &Round) -> String {
 
 /// F9, game thread: every menu movie on screen, panels marked, packed into numbered one-line toasts.
 unsafe fn list_on_screen(system: usize) {
-    let panels: Vec<String> = PANELS.lock().unwrap().iter().map(|(_, n)| n.clone()).collect();
+    let panels: Vec<String> = PANELS.lock().unwrap().iter().map(|p| p.name.clone()).collect();
     let mut names = unsafe { active_menu_names(system) };
     names.sort();
     names.dedup();
@@ -119,7 +127,7 @@ fn original(slot: &AtomicUsize) -> WindowFn {
 
 // ---- hooks ----------------------------------------------------------------------------------------------------------
 
-/// Self-owned window step (0x140d61af0), every live window, every frame.
+/// Self-owned window step, every live window, every frame.
 pub unsafe extern "system" fn window_step_hook(window: usize, out: usize, p3: usize, p4: usize) -> usize {
     if PENDING.load(Ordering::Relaxed) {
         if let Some(name) = unsafe { next_reload(window) } {
@@ -131,17 +139,20 @@ pub unsafe extern "system" fn window_step_hook(window: usize, out: usize, p3: us
 
 pub unsafe extern "system" fn panel_open_hook(panel: usize, a: usize, b: usize, c: usize) -> usize {
     let result = unsafe { original(&ORIG_PANEL_OPEN)(panel, a, b, c) };
+    let player: usize = unsafe { read(panel + PANEL_PLAYER) };
     let mut panels = PANELS.lock().unwrap();
-    panels.retain(|(p, _)| *p != panel);
-    if unsafe { read::<usize>(panel + PANEL_PLAYER) } != 0 {
-        panels.push((panel, unsafe { name_at(panel + PANEL_NAME) }));
+    panels.retain(|p| p.panel != panel);
+    if player != 0 {
+        panels.push(Panel { panel, player, name: unsafe { name_at(panel + PANEL_NAME) } });
     }
     result
 }
 
-pub unsafe extern "system" fn panel_close_hook(panel: usize, a: usize, b: usize, c: usize) -> usize {
-    PANELS.lock().unwrap().retain(|(p, _)| *p != panel);
-    unsafe { original(&ORIG_PANEL_CLOSE)(panel, a, b, c) }
+/// The scaleform system's player close (system, player): a panel whose player closes is no longer live.
+pub unsafe extern "system" fn player_close_hook(system: usize, player: usize) -> usize {
+    PANELS.lock().unwrap().retain(|p| p.player != player);
+    let close: PlayerCloseFn = unsafe { std::mem::transmute(ORIG_PLAYER_CLOSE.load(Ordering::Relaxed)) };
+    unsafe { close(system, player) }
 }
 
 // ---- game-thread work -----------------------------------------------------------------------------------------------
@@ -212,7 +223,7 @@ unsafe fn handle_requests() -> Vec<Waiting> {
         .map(|name| {
             unsafe { release_cached(system, &name) };
             unsafe { drop_repository_leftovers(system, &name) };
-            let previewed = unsafe { reload_panels(&name) };
+            let previewed = unsafe { reload_panels(system, &name) };
             Waiting { name, previewed }
         })
         .collect()
@@ -222,11 +233,12 @@ unsafe fn handle_requests() -> Vec<Waiting> {
 /// entry, so the next lookup loads the file again. The old movie must really go, or Scaleform hands it back.
 unsafe fn release_cached(system: usize, name: &str) {
     let Some(node) = (unsafe { cache_node(system, name) }) else { return };
-    let wrapper: usize = unsafe { read(node + NODE_VALUE) };
+    let value = node + game().node_value;
+    let wrapper: usize = unsafe { read(value) };
     if wrapper == 0 {
         return;
     }
-    unsafe { write::<usize>(node + NODE_VALUE, 0) };
+    unsafe { write::<usize>(value, 0) };
     let refcount = unsafe { &*((wrapper + 8) as *const std::sync::atomic::AtomicI32) };
     if refcount.fetch_sub(1, Ordering::SeqCst) == 1 {
         let destroy: unsafe extern "system" fn(usize) = unsafe { std::mem::transmute(read::<usize>(read::<usize>(wrapper))) };
@@ -234,24 +246,25 @@ unsafe fn release_cached(system: usize, name: &str) {
     }
 }
 
-/// Boot requests some files twice (01_070_CommandList, 01_900_Black) and opens them once; the second copy stays in
-/// the repository with an already-used file object. Loading that instead of the disk file kills the game.
+/// AC6: boot requests some files twice (01_070_CommandList, 01_900_Black) and opens them once; the second copy stays
+/// in the repository with an already-used file object. Loading that instead of the disk file kills the game.
 unsafe fn drop_repository_leftovers(system: usize, name: &str) {
-    let repository: usize = unsafe { read(REPOSITORY) };
-    let Some(index) = menu_index(name) else { return };
+    let Some(repo) = &game().repository else { return };
+    let repository: usize = unsafe { read(at(repo.repository)) };
+    let Some(entry) = menu_entry_named(name) else { return };
     if repository == 0 {
         return;
     }
     // the game's string object: a generous zeroed buffer, leaked (a few bytes per reload)
     let buffer = Box::leak(vec![0u8; 0x200].into_boxed_slice());
-    let make_path: MenuPathFn = unsafe { std::mem::transmute(MENU_PATH) };
-    unsafe { make_path(buffer.as_mut_ptr(), MENU_TABLE + index * 16) };
+    let make_path: MenuPathFn = unsafe { std::mem::transmute(at(repo.menu_path)) };
+    unsafe { make_path(buffer.as_mut_ptr(), entry) };
     let path = usize::from_le_bytes(buffer[8..16].try_into().unwrap()) as *const u16;
     if path.is_null() {
         return;
     }
-    let lookup: RepositoryLookupFn = unsafe { std::mem::transmute(REPOSITORY_LOOKUP) };
-    let release: RepositoryReleaseFn = unsafe { std::mem::transmute(REPOSITORY_RELEASE) };
+    let lookup: RepositoryLookupFn = unsafe { std::mem::transmute(at(repo.lookup)) };
+    let release: RepositoryReleaseFn = unsafe { std::mem::transmute(at(repo.release)) };
     for _ in 0..8 {
         let entry = unsafe { lookup(repository, path) };
         if entry == 0 {
@@ -264,15 +277,34 @@ unsafe fn drop_repository_leftovers(system: usize, name: &str) {
 
 /// Closes and reopens the live panels showing this movie. Their owners took handles into the old movie when they
 /// were built, so text, data and input stay with the old (now invisible) one.
-unsafe fn reload_panels(name: &str) -> bool {
-    let panels: Vec<usize> =
-        PANELS.lock().unwrap().iter().filter(|(_, n)| n.eq_ignore_ascii_case(name)).map(|(p, _)| *p).collect();
+unsafe fn reload_panels(system: usize, name: &str) -> bool {
+    let panels: Vec<(usize, usize)> = PANELS
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|p| p.name.eq_ignore_ascii_case(name))
+        .map(|p| (p.panel, p.player))
+        .collect();
     if panels.is_empty() {
         return false;
     }
-    for panel in &panels {
-        unsafe { original(&ORIG_PANEL_CLOSE)(*panel, 0, 0, 0) };
-        unsafe { original(&ORIG_PANEL_OPEN)(*panel, 0, 0, 0) };
+    let game = game();
+    // Through the game's own (hooked) functions, so the registry follows: the close drops the entry, the open adds it.
+    let open: WindowFn = unsafe { std::mem::transmute(code(&game.panel_open)) };
+    for (panel, player) in panels {
+        match &game.panel_close {
+            Some(close) => {
+                let close: WindowFn = unsafe { std::mem::transmute(code(close)) };
+                unsafe { close(panel, 0, 0, 0) };
+            }
+            // Elden Ring closes a panel inline, as its movie swap does: close the player, clear the field.
+            None => {
+                let close: PlayerCloseFn = unsafe { std::mem::transmute(code(&game.player_close)) };
+                unsafe { close(system, player) };
+                unsafe { write::<usize>(panel + PANEL_PLAYER, 0) };
+            }
+        }
+        unsafe { open(panel, 0, 0, 0) };
     }
     log(&format!(
         "{name}: panel reloaded as a PREVIEW: new shapes and colors, but its text, data and input stay with the old \
@@ -289,12 +321,12 @@ unsafe fn reload_window(window: usize, name: &str, out: usize, p3: usize, p4: us
     let close_check: usize = unsafe { read(window + WINDOW_CLOSE_CHECK) };
     if close_check != 0
         && (close_check != window + WINDOW_CLOSE_CHECK_STORAGE
-            || unsafe { read::<usize>(close_check) } != FUNCTION_POINTER_FUNCTION)
+            || unsafe { read::<usize>(close_check) } != at(game().function_pointer_function))
     {
         warn(&format!("{name}: unusual close check kept through the reload; report it if it misbehaves"));
     }
     unsafe { write::<usize>(window + WINDOW_CLOSE_CHECK, 0) };
-    let close: WindowFn = unsafe { std::mem::transmute(WINDOW_CLOSE) };
+    let close: WindowFn = unsafe { std::mem::transmute(code(&game().window_close)) };
     unsafe { close(window, 0, 0, 0) };
     unsafe { write::<usize>(window + WINDOW_CLOSE_CHECK, close_check) };
     let result = unsafe { original(&ORIG_WINDOW_STEP)(window, out, p3, p4) };

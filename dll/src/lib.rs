@@ -1,5 +1,5 @@
-//! ui-hot-reload: reload edited Armored Core VI menu movies (.gfx) in the running game. Usage: ../../README.md;
-//! how it works: ../../docs/how-it-works.md.
+//! ui-hot-reload: reload edited menu movies (.gfx) in the running game, for Armored Core VI and Elden Ring.
+//! Usage: ../../README.md; how it works: ../../docs/how-it-works.md.
 //!
 //! F7 reloads the menu files that changed in the package since the last reload; F8 turns the file watcher on/off
 //! (off at start); F9 lists the menu movies on screen. Log: Game\debug-logs\ui_hot_reload.log. With
@@ -84,24 +84,26 @@ fn package_from_config(dll: &Path) -> Option<PathBuf> {
     package
 }
 
-unsafe fn hook(addr: usize, prologue: &[u8], detour: *const (), original: &AtomicUsize) -> Result<(), String> {
-    game::check_bytes(addr, prologue)?;
-    let d = unsafe { RawDetour::new(addr as *const (), detour) }.map_err(|e| e.to_string())?;
+/// Detours a game function (its bytes were checked by `game::detect`).
+unsafe fn hook(function: &game::Code, detour: *const (), original: &AtomicUsize) -> Result<(), String> {
+    let d = unsafe { RawDetour::new(game::code(function) as *const (), detour) }.map_err(|e| e.to_string())?;
     original.store(d.trampoline() as *const () as usize, Ordering::Relaxed);
     unsafe { d.enable() }.map_err(|e| e.to_string())?;
     std::mem::forget(d);
     Ok(())
 }
 
-fn install() -> Result<(), String> {
-    game::check_bytes(game::WINDOW_CLOSE, &game::WINDOW_CLOSE_PROLOGUE)?;
-    game::patch_disk_fallback()?;
-    unsafe {
-        hook(game::WINDOW_STEP, &game::WINDOW_STEP_PROLOGUE, reload::window_step_hook as *const (), &reload::ORIG_WINDOW_STEP)?;
-        hook(game::PANEL_OPEN, &game::PANEL_OPEN_PROLOGUE, reload::panel_open_hook as *const (), &reload::ORIG_PANEL_OPEN)?;
-        hook(game::PANEL_CLOSE, &game::PANEL_CLOSE_PROLOGUE, reload::panel_close_hook as *const (), &reload::ORIG_PANEL_CLOSE)?;
+fn install() -> Result<&'static game::Game, String> {
+    let game = game::detect()?;
+    if let Some(repository) = &game.repository {
+        game::patch_disk_fallback(repository)?;
     }
-    Ok(())
+    unsafe {
+        hook(&game.window_step, reload::window_step_hook as *const (), &reload::ORIG_WINDOW_STEP)?;
+        hook(&game.panel_open, reload::panel_open_hook as *const (), &reload::ORIG_PANEL_OPEN)?;
+        hook(&game.player_close, reload::player_close_hook as *const (), &reload::ORIG_PLAYER_CLOSE)?;
+    }
+    Ok(game)
 }
 
 fn reload_changes(files: &mut files::MenuFiles) {
@@ -169,7 +171,8 @@ extern "system" fn DllMain(module: *mut u8, reason: u32, _reserved: *mut u8) -> 
             let _ = LOG.set(Mutex::new(file));
         }
         match install() {
-            Ok(()) => {
+            Ok(game) => {
+                log(&format!("hooked {}", game.name));
                 let dll = dll_path(module);
                 std::thread::spawn(move || key_loop(dll));
             }
