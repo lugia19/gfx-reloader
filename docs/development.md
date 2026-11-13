@@ -2,10 +2,10 @@
 
 - `dll\`: the tool. `cargo +stable build --release` -> `dll\target\release\ui_hot_reload.dll`. Modules: `game.rs`
   (addresses, layouts), `reload.rs` (hooks and the game-thread work), `files.rs` (package snapshot, watcher),
-  `lib.rs` (setup, config, keys), `ac6_toast_client.rs` (copied from AC6-Toast-Wrapper's `client\`; does nothing
-  without `ac6_toast.dll`). F9 reads the scaleform system's active player list (what gets drawn).
-- The test profile also loads `tests\toast-build\release\ac6_toast.dll`, a plain build of AC6-Toast-Wrapper
-  (without its F7/F8 test hotkeys, which would clash): in `system-toast\dll`,
+  `lib.rs` (setup, config, keys), `toast_wrapper_client.rs` (copied from Toast-Wrapper's `client\`; does nothing
+  without `toast_wrapper.dll`). F9 reads the scaleform system's active player list (what gets drawn).
+- The test profile also loads `tests\toast-build\release\toast_wrapper.dll`, a plain build of Toast-Wrapper
+  (without its F7 test hotkey, which would clash): in `system-toast\dll`,
   `cargo +stable build --release --target-dir <this folder>\tests\toast-build`.
 - `probe-dll\`: the research probe the tool came from. Logs every menu lookup, load, file open, menu open/close with
   call stacks, Scaleform's own log messages; F5 hardware write watchpoint on `CSMenuMan+0x10` (needs

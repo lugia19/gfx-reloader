@@ -155,12 +155,12 @@ all normal (run B); the three-menu reload above also ran with Arxan on.
 - The finished tool, tested with Arxan on: F7 with a live menu, a panel and a menu not on screen; the F8 watcher; the
   HUD reloaded live during AC TEST (still fully working, back to the garage normally); F9 and the toasts; the test kit
   from a fresh unzip.
-- `01_SystemToast` (how toasts are driven) was worked out in its own project, AC6-Toast-Wrapper (`system-toast`).
+- `01_SystemToast` (how toasts are driven) was worked out in its own project, Toast-Wrapper (`system-toast`).
 
 ## Planned: Elden Ring support
 
 Make gfx-reloader support both AC6 and Elden Ring in one DLL (game detected at load, game-specific addresses and
-offsets in a per-game table, shared logic unchanged), together with AC6-Toast-Wrapper. Starting points: the ER Ghidra
+offsets in a per-game table, shared logic unchanged), together with Toast-Wrapper. Starting points: the ER Ghidra
 project with RTTI (`AC6_tools\Research\exe_re_er\ghidra\ER.gpr`); ER names already matched: `CS::CSScaleformSystem`
 (movie cache map at +0x9b0 in ER, +0x9b8 in AC6), `CS::CSScaleformFileOpener`, `CSMenuManImp` (fromsoftware-rs
 `crates/eldenring/src/cs/menu_man.rs`); me3's ER profile. Debug with `--disable-arxan`, test with it on.

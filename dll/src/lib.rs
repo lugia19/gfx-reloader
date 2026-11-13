@@ -3,12 +3,12 @@
 //!
 //! F7 reloads the menu files that changed in the package since the last reload; F8 turns the file watcher on/off
 //! (off at start); F9 lists the menu movies on screen. Log: Game\debug-logs\ui_hot_reload.log. With
-//! ac6_toast.dll loaded, results also show as in-game toasts.
+//! toast_wrapper.dll (Toast-Wrapper) loaded, results also show in the game's announce banner.
 
-mod ac6_toast_client;
 mod files;
 mod game;
 mod reload;
+mod toast_wrapper_client;
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -21,9 +21,9 @@ use retour::RawDetour;
 const VK_F7: i32 = 0x76;
 const VK_F8: i32 = 0x77;
 const VK_F9: i32 = 0x78;
-const TOAST_SECONDS: f32 = 4.0;
-/// The toast strip fits about this many characters on one line.
-pub const TOAST_LINE: usize = 85;
+/// Characters per announce-banner message: Toast-Wrapper says about 150 fit before it scrolls, minus its 18-space
+/// indent to be safe.
+pub const TOAST_LINE: usize = 130;
 const WATCH_INTERVAL: Duration = Duration::from_millis(500);
 
 static START: OnceLock<Instant> = OnceLock::new();
@@ -44,9 +44,10 @@ pub fn log(line: &str) {
     }
 }
 
-/// Shows a one-line toast if ac6_toast.dll is loaded (does nothing otherwise).
+/// Shows a one-line message in the game's announce banner if toast_wrapper.dll is loaded (does nothing otherwise).
+/// Messages queue and stay up about 13 s each (the game's timing), so keep them few.
 pub fn toast(text: &str) {
-    ac6_toast_client::show(text, TOAST_SECONDS);
+    toast_wrapper_client::show(text);
 }
 
 /// The package folder to watch, first found of: `package = <folder>` from a ui_hot_reload.ini next to the DLL; the

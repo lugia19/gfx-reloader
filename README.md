@@ -26,8 +26,9 @@ package = C:\path\to\your\package
 - Or press **F8** once to turn on the file watcher: every save is reloaded automatically. F8 again turns it off.
 - **F9** lists every menu movie on screen right now, marking the panels that can only be previewed (see below).
 - `Game\debug-logs\ui_hot_reload.log` says what happened to each menu. If
-  [AC6-Toast-Wrapper](https://github.com/lugia19/AC6-Toast-Wrapper) (`ac6_toast.dll`) is in your profile too, the
-  results also show in game as toasts ("Reloaded 3 menus (1 preview only, broken until the next scene change)").
+  [Toast-Wrapper](https://github.com/lugia19/Toast-Wrapper) (`toast_wrapper.dll`) is in your profile too, the
+  results also show in the game's announce banner ("Reloaded 3 menus (1 preview only, broken until the next scene
+  change)").
 
 ## What you'll see
 

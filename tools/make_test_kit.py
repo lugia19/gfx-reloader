@@ -3,7 +3,7 @@ package with the stock HUD, and colored HUD variants to swap in. Output: dist/gf
 
     python -I tools/make_test_kit.py
 
-Needs the built DLLs: dll/target/release/ui_hot_reload.dll and tests/toast-build/release/ac6_toast.dll
+Needs the built DLLs: dll/target/release/ui_hot_reload.dll and tests/toast-build/release/toast_wrapper.dll
 (docs/development.md says how to build the toast one).
 """
 import os, shutil, struct, sys
@@ -27,7 +27,7 @@ COLORS = {
 
 PROFILE = """profileVersion = "v1"
 
-# gfx-reloader test kit: the stock HUD in a package, the reload tool, and the toast DLL for in-game messages.
+# gfx-reloader test kit: the stock HUD in a package, the reload tool, and Toast-Wrapper for in-game messages.
 # Uses its own save (GfxReloaderTest.sl2, copied from your real save the first time), so your save isn't touched.
 
 savefile = "GfxReloaderTest.sl2"
@@ -43,7 +43,7 @@ path = 'mod'
 path = 'ui_hot_reload.dll'
 
 [[natives]]
-path = 'ac6_toast.dll'
+path = 'toast_wrapper.dll'
 """
 
 LAUNCH = """@echo off
@@ -69,9 +69,10 @@ in recolored HUDs and watch them change live. Armored Core VI 1.09.1, needs me3 
    It uses its own save (GfxReloaderTest.sl2, a copy of your real save), so your progress isn't touched.
 2. Load in and start an AC TEST from the garage (Assembly, RB), so the HUD is on screen.
 3. Copy one of the files in colored\\ over mod\\menu\\01_000_fe.gfx (it must keep the name 01_000_fe.gfx).
-4. Press F7. The HUD should change color right away, and a toast in the top left says "Reloaded 1 menu".
+4. Press F7. The HUD should change color right away, and the announce banner at the bottom says
+   "Reloaded 1 menu".
    F8 turns on a file watcher instead (every save reloads by itself, about 1-2 s later); F8 again turns it off.
-   F9 lists every menu on screen in toasts.
+   F9 lists every menu on screen in the banner.
 5. To go back to stock, copy colored\\01_000_fe_stock.gfx over it the same way.
 
 If something goes wrong, send the log: <game folder>\\Game\\debug-logs\\ui_hot_reload.log
@@ -93,7 +94,7 @@ def make_hud(color, add, out):
 
 def main():
     dll = os.path.join(ROOT, 'dll', 'target', 'release', 'ui_hot_reload.dll')
-    toast = os.path.join(ROOT, 'tests', 'toast-build', 'release', 'ac6_toast.dll')
+    toast = os.path.join(ROOT, 'tests', 'toast-build', 'release', 'toast_wrapper.dll')
     for path in (dll, toast):
         if not os.path.isfile(path):
             sys.exit(f'missing {path}: build it first (docs/development.md)')
@@ -102,7 +103,7 @@ def main():
     os.makedirs(os.path.join(KIT, 'mod', 'menu'))
     os.makedirs(os.path.join(KIT, 'colored'))
     shutil.copyfile(dll, os.path.join(KIT, 'ui_hot_reload.dll'))
-    shutil.copyfile(toast, os.path.join(KIT, 'ac6_toast.dll'))
+    shutil.copyfile(toast, os.path.join(KIT, 'toast_wrapper.dll'))
     stock = tint.stock_path('01_000_FE')
     shutil.copyfile(stock, os.path.join(KIT, 'mod', 'menu', HUD))
     shutil.copyfile(stock, os.path.join(KIT, 'colored', '01_000_fe_stock.gfx'))
