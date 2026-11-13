@@ -17,6 +17,12 @@ const NODE_KEY: usize = 0x28;
 const NODE_KEY_LEN: usize = 0x30;
 pub const NODE_VALUE: usize = 0x248;
 
+/// Active players (what gets drawn): fixed vector of {player, int open count} (16 bytes) at system+0x9e8, count at
+/// +0xdf0, max 64. A player keeps its menu table entry copy at +0x20, name pointer +0x28.
+const ACTIVE_LIST: usize = 0x9e8;
+const ACTIVE_COUNT: usize = 0xdf0;
+const PLAYER_NAME: usize = 0x28;
+
 /// The in-memory file repository the game's Scaleform file opener reads first: lookup by wchar path -> entry.
 pub const REPOSITORY: usize = 0x144e245b0;
 pub const REPOSITORY_LOOKUP: usize = 0x14153d3d0;
@@ -98,6 +104,17 @@ pub fn menu_index(name: &str) -> Option<usize> {
 pub fn scaleform_system() -> usize {
     let holder: usize = unsafe { read(SCALEFORM_HOLDER) };
     if holder == 0 { 0 } else { unsafe { read(holder + 8) } }
+}
+
+/// Menu names of every active player, i.e. every menu movie on screen (game thread).
+pub unsafe fn active_menu_names(system: usize) -> Vec<String> {
+    let count: usize = unsafe { read(system + ACTIVE_COUNT) };
+    let base = (system + ACTIVE_LIST + 7) & !7;
+    (0..count.min(64))
+        .map(|i| unsafe { read::<usize>(base + i * 16) })
+        .filter(|player| *player != 0)
+        .map(|player| unsafe { name_at(player + PLAYER_NAME) })
+        .collect()
 }
 
 /// The movie cache node for a menu (MSVC std::map: left +0, parent +8, right +0x10, is-nil byte +0x19).

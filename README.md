@@ -21,7 +21,10 @@ For game version 1.09.1, with [me3](https://github.com/garyttierney/me3).
 
 - Edit and save any `menu\*.gfx` file in your package, then press **F7** in game.
 - Or press **F8** once to turn on the file watcher: every save is reloaded automatically. F8 again turns it off.
-- `Game\debug-logs\ui_hot_reload.log` says what happened to each menu.
+- **F9** lists every menu movie on screen right now, marking the panels that can only be previewed (see below).
+- `Game\debug-logs\ui_hot_reload.log` says what happened to each menu. If
+  [AC6-Toast-Wrapper](https://github.com/lugia19/AC6-Toast-Wrapper) (`ac6_toast.dll`) is in your profile too, the
+  results also show in game as toasts ("Reloaded 3 menus (1 preview only, broken until the next scene change)").
 
 ## What you'll see
 

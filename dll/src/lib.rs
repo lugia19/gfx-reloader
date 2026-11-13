@@ -2,8 +2,10 @@
 //! how it works: ../../docs/how-it-works.md.
 //!
 //! F7 reloads the menu files that changed in the package since the last reload; F8 turns the file watcher on/off
-//! (off at start). Log: Game\debug-logs\ui_hot_reload.log.
+//! (off at start); F9 lists the menu movies on screen. Log: Game\debug-logs\ui_hot_reload.log. With
+//! ac6_toast.dll loaded, results also show as in-game toasts.
 
+mod ac6_toast_client;
 mod files;
 mod game;
 mod reload;
@@ -18,6 +20,10 @@ use retour::RawDetour;
 
 const VK_F7: i32 = 0x76;
 const VK_F8: i32 = 0x77;
+const VK_F9: i32 = 0x78;
+const TOAST_SECONDS: f32 = 4.0;
+/// The toast strip fits about this many characters on one line.
+pub const TOAST_LINE: usize = 85;
 const WATCH_INTERVAL: Duration = Duration::from_millis(500);
 
 static START: OnceLock<Instant> = OnceLock::new();
@@ -36,6 +42,11 @@ pub fn log(line: &str) {
             let _ = f.flush();
         }
     }
+}
+
+/// Shows a one-line toast if ac6_toast.dll is loaded (does nothing otherwise).
+pub fn toast(text: &str) {
+    ac6_toast_client::show(text, TOAST_SECONDS);
 }
 
 /// `package = <folder>` from ui_hot_reload.ini, next to the DLL or in one of its parent folders.
@@ -82,6 +93,7 @@ fn reload_changes(files: &mut files::MenuFiles) {
     let names = files.take_changes();
     if names.is_empty() {
         log("no changed menu files");
+        toast("No changed menu files");
         return;
     }
     log(&format!("reloading {}", names.join(", ")));
@@ -92,19 +104,22 @@ fn reload_changes(files: &mut files::MenuFiles) {
 fn key_loop(dll: PathBuf) {
     let Some(package) = package_from_config(&dll) else { return };
     let mut files = files::MenuFiles::new(&package);
-    log("ready: F7 reloads changed menu files, F8 turns the file watcher on/off (off now)");
-    let mut was_down = [false; 2];
+    log("ready: F7 reloads changed menu files, F8 turns the file watcher on/off (off now), F9 lists the menu movies on screen");
+    let mut was_down = [false; 3];
     let mut watching = false;
     let mut last_poll = Instant::now();
     loop {
-        for (i, key) in [VK_F7, VK_F8].into_iter().enumerate() {
+        for (i, key) in [VK_F7, VK_F8, VK_F9].into_iter().enumerate() {
             let down = unsafe { GetAsyncKeyState(key) } as u16 & 0x8000 != 0;
             if down && !was_down[i] {
-                if key == VK_F7 {
-                    reload_changes(&mut files);
-                } else {
-                    watching = !watching;
-                    log(if watching { "file watcher ON" } else { "file watcher OFF" });
+                match key {
+                    VK_F7 => reload_changes(&mut files),
+                    VK_F8 => {
+                        watching = !watching;
+                        log(if watching { "file watcher ON" } else { "file watcher OFF" });
+                        toast(if watching { "UI file watcher on" } else { "UI file watcher off" });
+                    }
+                    _ => reload::request_list(),
                 }
             }
             was_down[i] = down;

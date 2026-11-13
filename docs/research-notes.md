@@ -173,7 +173,8 @@ mission would only add cutscene / comms windows.)
    (`0x14101b770`, called via `0x140cce4e0` from `0x140cd2e70` / `0x140cd4290`; layer 0x1e; factory `0x1439c0bf0`).
    To find: the controller the factory builds, its update, the message queue it plays (ER's CSMenuManImp has a
    `FeSystemAnnounceViewModel` with a queue; fromsoftware-rs `crates/eldenring/src/cs/menu_man.rs`), and who pushes
-   into it, i.e. which events show a toast; maybe trigger one.
+   into it, i.e. which events show a toast; maybe trigger one. (Done 2026-11-13 in its own project,
+   `AC6_Projects\system-toast\notes.md`.)
 (Done 2026-11-13: the second close check `0x140d626f0` is `xor eax,eax; ret`, a "never close" default installed by a
 generic window-job constructor (around `0x140d619f0`); all seven persistent windows carry it.)
 

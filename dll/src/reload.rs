@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::game::*;
-use crate::log;
+use crate::{TOAST_LINE, log, toast};
 
 type WindowFn = unsafe extern "system" fn(usize, usize, usize, usize) -> usize;
 type RepositoryLookupFn = unsafe extern "system" fn(usize, *const u16) -> usize;
@@ -29,6 +29,8 @@ pub static ORIG_PANEL_CLOSE: AtomicUsize = AtomicUsize::new(0);
 
 /// Set while there are requests or menus waiting for their window, so the per-frame hook does nothing otherwise.
 static PENDING: AtomicBool = AtomicBool::new(false);
+/// F9: list the menu movies on screen at the next window step.
+static LIST_REQUESTED: AtomicBool = AtomicBool::new(false);
 /// Menu names asked for by F7 / the watcher, not yet handled on the game thread.
 static REQUESTS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 /// Menus waiting for their live self-owned window to step, until every live window has had its step.
@@ -50,12 +52,68 @@ struct Round {
     first_window: usize,
     started: Instant,
     waiting: Vec<Waiting>,
+    /// For the summary toast: menus handled, how many only as a panel preview, and whether one of those is a panel
+    /// that only the title screen rebuilds.
+    menus: usize,
+    previews: usize,
+    persistent_preview: bool,
 }
 
 pub fn request(names: Vec<String>) {
     let mut requests = REQUESTS.lock().unwrap();
     requests.extend(names);
     PENDING.store(true, Ordering::Relaxed);
+}
+
+pub fn request_list() {
+    let _requests = REQUESTS.lock().unwrap(); // same lock as request(), so the idle check can't miss it
+    LIST_REQUESTED.store(true, Ordering::Relaxed);
+    PENDING.store(true, Ordering::Relaxed);
+}
+
+/// Logs a warning and shows it as a toast.
+fn warn(text: &str) {
+    log(&format!("warning: {text}"));
+    toast(text);
+}
+
+/// "Reloaded 3 menus (1 preview only, broken until the next scene change)".
+fn round_summary(round: &Round) -> String {
+    let menus = if round.menus == 1 { "1 menu".to_string() } else { format!("{} menus", round.menus) };
+    if round.previews == 0 {
+        return format!("Reloaded {menus}");
+    }
+    let until = if round.persistent_preview { "you return to the title screen" } else { "the next scene change" };
+    format!("Reloaded {menus} ({} preview only, broken until {until})", round.previews)
+}
+
+/// F9, game thread: every menu movie on screen, panels marked, packed into numbered one-line toasts.
+unsafe fn list_on_screen(system: usize) {
+    let panels: Vec<String> = PANELS.lock().unwrap().iter().map(|(_, n)| n.clone()).collect();
+    let mut names = unsafe { active_menu_names(system) };
+    names.sort();
+    names.dedup();
+    let entries: Vec<String> = names
+        .iter()
+        .map(|n| if panels.iter().any(|p| p == n) { format!("{n} (preview only)") } else { n.clone() })
+        .collect();
+    log(&format!("on screen: {}", entries.join(", ")));
+    // pack into lines, leaving room for the "UI on screen (n/m): " prefix
+    let room = TOAST_LINE - "UI on screen (10/10): ".len();
+    let mut lines: Vec<String> = Vec::new();
+    for entry in entries {
+        match lines.last_mut() {
+            Some(line) if line.len() + 2 + entry.len() <= room => {
+                line.push_str(", ");
+                line.push_str(&entry);
+            }
+            _ => lines.push(entry),
+        }
+    }
+    let total = lines.len();
+    for (i, line) in lines.iter().enumerate() {
+        toast(&format!("UI on screen ({}/{total}): {line}", i + 1));
+    }
 }
 
 fn original(slot: &AtomicUsize) -> WindowFn {
@@ -94,19 +152,38 @@ pub unsafe extern "system" fn panel_close_hook(panel: usize, a: usize, b: usize,
 /// Game thread, while something is pending: ends the current round if every live window has stepped, handles new
 /// requests, and returns the menu to reload if `window` is the live window one of them is waiting for.
 unsafe fn next_reload(window: usize) -> Option<String> {
+    if LIST_REQUESTED.swap(false, Ordering::Relaxed) {
+        let system = scaleform_system();
+        if system != 0 {
+            unsafe { list_on_screen(system) };
+        }
+    }
     let mut round = ROUND.lock().unwrap();
     if round.as_ref().is_some_and(|r| r.first_window == window || r.started.elapsed() > ROUND_SAFETY_CAP) {
-        for menu in round.take().unwrap().waiting {
+        let finished = round.take().unwrap();
+        for menu in &finished.waiting {
             if !menu.previewed {
                 log(&format!("{}: not on screen right now; the new file is used the next time it opens", menu.name));
             }
         }
+        toast(&round_summary(&finished));
     }
     let new = unsafe { handle_requests() };
     if !new.is_empty() {
-        round.get_or_insert_with(|| Round { first_window: window, started: Instant::now(), waiting: Vec::new() })
-            .waiting
-            .extend(new);
+        let current = round.get_or_insert_with(|| Round {
+            first_window: window,
+            started: Instant::now(),
+            waiting: Vec::new(),
+            menus: 0,
+            previews: 0,
+            persistent_preview: false,
+        });
+        current.menus += new.len();
+        for menu in new.iter().filter(|m| m.previewed) {
+            current.previews += 1;
+            current.persistent_preview |= PERSISTENT_PANELS.iter().any(|p| p.eq_ignore_ascii_case(&menu.name));
+        }
+        current.waiting.extend(new);
     }
     let Some(current) = round.as_mut() else {
         // nothing waiting: go idle unless a request arrived meanwhile (checked under the lock request() uses)
@@ -189,7 +266,7 @@ unsafe fn drop_repository_leftovers(system: usize, name: &str) {
         }
         unsafe { release(system, entry) };
     }
-    log(&format!("{name}: warning: couldn't clear its leftover boot copy; the reload may show the old file"));
+    warn(&format!("{name}: couldn't clear its leftover boot copy; may show the old file"));
 }
 
 /// Closes and reopens the live panels showing this movie. Their owners took handles into the old movie when they
@@ -226,7 +303,7 @@ unsafe fn reload_window(window: usize, name: &str, out: usize, p3: usize, p4: us
         && (close_check != window + WINDOW_CLOSE_CHECK_STORAGE
             || unsafe { read::<usize>(close_check) } != FUNCTION_POINTER_FUNCTION)
     {
-        log(&format!("{name}: warning: unusual close check kept through the reload; report this if it misbehaves"));
+        warn(&format!("{name}: unusual close check kept through the reload; report it if it misbehaves"));
     }
     unsafe { write::<usize>(window + WINDOW_CLOSE_CHECK, 0) };
     let close: WindowFn = unsafe { std::mem::transmute(WINDOW_CLOSE) };
@@ -236,7 +313,7 @@ unsafe fn reload_window(window: usize, name: &str, out: usize, p3: usize, p4: us
     if unsafe { read::<usize>(window + WINDOW_CONTROLLER) } != 0 {
         log(&format!("{name}: reloaded live"));
     } else {
-        log(&format!("{name}: warning: closed but didn't reopen; it should come back the next time it opens"));
+        warn(&format!("{name}: closed but didn't reopen; it should come back next time it opens"));
     }
     result
 }

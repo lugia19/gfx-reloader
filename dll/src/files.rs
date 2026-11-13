@@ -64,6 +64,7 @@ impl MenuFiles {
                     "{file}: new since the game started; me3 only serves files that existed at launch, so restart \
                      the game once to use it"
                 ));
+                crate::toast(&format!("{file} is new: restart the game to use it"));
                 continue;
             }
             let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
