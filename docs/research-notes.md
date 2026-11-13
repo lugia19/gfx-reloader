@@ -160,7 +160,5 @@ all normal (run B); the three-menu reload above also ran with Arxan on.
 ## Planned: Elden Ring support
 
 Make gfx-reloader support both AC6 and Elden Ring in one DLL (game detected at load, game-specific addresses and
-offsets in a per-game table, shared logic unchanged), together with Toast-Wrapper. Starting points: the ER Ghidra
-project with RTTI (`AC6_tools\Research\exe_re_er\ghidra\ER.gpr`); ER names already matched: `CS::CSScaleformSystem`
-(movie cache map at +0x9b0 in ER, +0x9b8 in AC6), `CS::CSScaleformFileOpener`, `CSMenuManImp` (fromsoftware-rs
-`crates/eldenring/src/cs/menu_man.rs`); me3's ER profile. Debug with `--disable-arxan`, test with it on.
+offsets in a per-game table, shared logic unchanged), like Toast-Wrapper. In progress: [er-port.md](er-port.md) (what's
+matched so far, with evidence, and what's left). Debug with `--disable-arxan`, test with it on.

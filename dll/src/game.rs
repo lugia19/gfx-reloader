@@ -8,7 +8,7 @@ use std::ffi::c_void;
 /// Menu table: 109 entries of 16 bytes {int layer, byte resident (+4), wchar* name (+8)}, filled at startup.
 pub const MENU_TABLE: usize = 0x144e28cf0;
 pub const MENU_TABLE_COUNT: usize = 109;
-/// `[[SCALEFORM_HOLDER] + 8]` = CSScaleformSystem.
+/// `[[SCALEFORM_HOLDER] + 8]` = the scaleform system (probably ER's `CS::CSScaleformImp`).
 const SCALEFORM_HOLDER: usize = 0x144e28818;
 /// The system's movie cache (std::map, head node pointer at +0x9c0). Nodes: key chars +0x28 / length +0x30, cached
 /// movie wrapper +0x248 (refcount +8, vtable slot 0 destroys it).
@@ -35,7 +35,7 @@ pub const MENU_PATH: usize = 0x14160a5b0;
 const DISK_FALLBACK_JNZ: usize = 0x1415f427d;
 const DISK_FALLBACK_ORIGINAL: [u8; 6] = [0x0f, 0x85, 0xfb, 0x01, 0x00, 0x00];
 
-// ---- self-owned menu windows (vtable 0x14390e498) ---------------------------------------------------------------
+// ---- self-owned menu windows (CS::MenuWindowJob, vtable 0x14390e498) -------------------------------------------
 
 /// Per-frame step (vtable slot +0x10): with no controller it opens the window (player, movie, controller).
 pub const WINDOW_STEP: usize = 0x140d61af0;
@@ -45,7 +45,8 @@ pub const WINDOW_CLOSE: usize = 0x14641c16c;
 pub const WINDOW_CLOSE_PROLOGUE: [u8; 8] = [0x40, 0x55, 0x56, 0x57, 0x48, 0x8b, 0xec, 0x48];
 pub const WINDOW_NAME: usize = 0x60;
 pub const WINDOW_FACTORY: usize = 0xa8;
-/// std::function "should this window close" set by the window's creator: inline storage +0xf0, impl pointer +0x128.
+/// The window's control check, `std::function<MenuWindowJob::MenuCtrlType()>` set by its creator: inline storage
+/// +0xf0, impl pointer +0x128.
 pub const WINDOW_CLOSE_CHECK_STORAGE: usize = 0xf0;
 pub const WINDOW_CLOSE_CHECK: usize = 0x128;
 pub const WINDOW_CONTROLLER: usize = 0x130;
