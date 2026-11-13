@@ -48,6 +48,13 @@ path = 'ac6_toast.dll'
 
 LAUNCH = """@echo off
 cd /d "%~dp0"
+where me3 >nul 2>nul
+if errorlevel 1 (
+    echo me3 isn't on your PATH. Install it from https://github.com/garyttierney/me3, or run it by its full path:
+    echo     "C:\\path\\to\\me3\\bin\\me3.exe" launch -p "%~dp0gfx-reloader-test.me3"
+    pause
+    exit /b 1
+)
 me3 launch -p gfx-reloader-test.me3
 """
 
@@ -57,7 +64,8 @@ README = """gfx-reloader test kit
 Reloads edited menu movies (.gfx) in the running game. This kit has the stock HUD in a mod package, so you can swap
 in recolored HUDs and watch them change live. Armored Core VI 1.09.1, needs me3 (https://github.com/garyttierney/me3).
 
-1. Unzip anywhere and run launch.bat (or: me3 launch -p gfx-reloader-test.me3 from this folder).
+1. Unzip anywhere and run launch.bat (or: me3 launch -p gfx-reloader-test.me3 from this folder; with a portable
+   me3 that isn't on your PATH, use the full path to its bin\\me3.exe).
    It uses its own save (GfxReloaderTest.sl2, a copy of your real save), so your progress isn't touched.
 2. Load in and start an AC TEST from the garage (Assembly, RB), so the HUD is on screen.
 3. Copy one of the files in colored\\ over mod\\menu\\01_000_fe.gfx (it must keep the name 01_000_fe.gfx).

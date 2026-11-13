@@ -49,18 +49,22 @@ pub fn toast(text: &str) {
     ac6_toast_client::show(text, TOAST_SECONDS);
 }
 
-/// The package folder to watch: `package = <folder>` from ui_hot_reload.ini (next to the DLL or in one of its parent
-/// folders), else the `mod` folder next to the DLL.
+/// The package folder to watch, first found of: `package = <folder>` from a ui_hot_reload.ini next to the DLL; the
+/// `mod` folder next to the DLL (the usual mod layout); a ui_hot_reload.ini in a folder above the DLL (development,
+/// where the DLL sits in dll\target\release).
 fn package_from_config(dll: &Path) -> Option<PathBuf> {
-    let Some(ini) = dll.ancestors().skip(1).map(|d| d.join("ui_hot_reload.ini")).find(|p| p.is_file()) else {
-        // no ini: the usual mod layout, a `mod` package folder next to the DLL
-        let default = dll.parent().unwrap_or(Path::new(".")).join("mod");
-        if default.is_dir() {
-            return Some(default);
-        }
+    let folder = dll.parent().unwrap_or(Path::new("."));
+    let ini_next_to_dll = folder.join("ui_hot_reload.ini");
+    let ini = if ini_next_to_dll.is_file() {
+        ini_next_to_dll
+    } else if folder.join("mod").is_dir() {
+        return Some(folder.join("mod"));
+    } else if let Some(ini) = folder.ancestors().skip(1).map(|d| d.join("ui_hot_reload.ini")).find(|p| p.is_file()) {
+        ini
+    } else {
         log(&format!(
             "no mod folder next to the DLL ({}) and no ui_hot_reload.ini pointing elsewhere; F7/F8 do nothing",
-            default.display()
+            folder.join("mod").display()
         ));
         return None;
     };
