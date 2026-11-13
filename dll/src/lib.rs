@@ -62,7 +62,8 @@ fn package_from_config(dll: &Path) -> Option<PathBuf> {
         .filter(|l| !l.starts_with('#') && !l.starts_with(';'))
         .filter_map(|l| l.split_once('='))
         .find(|(key, _)| key.trim() == "package")
-        .map(|(_, value)| PathBuf::from(value.trim()));
+        // a relative path is relative to the ini's folder
+        .map(|(_, value)| ini.parent().unwrap_or(Path::new(".")).join(value.trim()));
     if package.is_none() {
         log(&format!("{}: no `package = ...` line; F7/F8 do nothing", ini.display()));
     }

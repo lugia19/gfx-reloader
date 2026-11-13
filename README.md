@@ -11,7 +11,8 @@ For game version 1.09.1, with [me3](https://github.com/garyttierney/me3).
    [[natives]]
    path = 'path\to\ui_hot_reload.dll'
    ```
-2. Put `ui_hot_reload.ini` next to the DLL and point it at your me3 package (the folder that contains `menu\`):
+2. Put `ui_hot_reload.ini` next to the DLL and point it at your me3 package (the folder that contains `menu\`;
+   a relative path is relative to the ini's folder):
    ```ini
    package = C:\path\to\your\mod
    ```
