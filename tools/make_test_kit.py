@@ -74,9 +74,6 @@ in recolored HUDs and watch them change live. Armored Core VI 1.09.1, needs me3 
    F9 lists every menu on screen in toasts.
 5. To go back to stock, copy colored\\01_000_fe_stock.gfx over it the same way.
 
-Also worth trying: reload while in the garage (the HUD isn't on screen; the next AC TEST should show the new color),
-and keep playing the AC TEST after a reload (boost, lock on, fire: the HUD should keep working).
-
 If something goes wrong, send the log: <game folder>\\Game\\debug-logs\\ui_hot_reload.log
 """
 
