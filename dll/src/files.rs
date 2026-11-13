@@ -30,19 +30,22 @@ fn scan(dir: &Path, out: &mut Stamps) {
     }
 }
 
+fn stamps(folder: &Path) -> Stamps {
+    let mut stamps = Stamps::new();
+    scan(folder, &mut stamps);
+    stamps
+}
+
 impl MenuFiles {
     pub fn new(package: &Path) -> Self {
         let folder = package.join("menu");
-        let mut snapshot = Stamps::new();
-        scan(&folder, &mut snapshot);
+        let snapshot = stamps(&folder);
         log(&format!("watching {} ({} menu files)", folder.display(), snapshot.len()));
         Self { folder, snapshot, settling: None }
     }
 
     fn current(&self) -> Stamps {
-        let mut stamps = Stamps::new();
-        scan(&self.folder, &mut stamps);
-        stamps
+        stamps(&self.folder)
     }
 
     /// F7: menu names of the files changed since the last reload, and takes a new snapshot.
@@ -63,8 +66,8 @@ impl MenuFiles {
                 ));
                 continue;
             }
-            let stem = path.file_stem().map(|s| s.to_string_lossy().to_uppercase()).unwrap_or_default();
-            match names.iter().find(|n| n.to_uppercase() == stem) {
+            let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+            match names.iter().find(|n| n.eq_ignore_ascii_case(&stem)) {
                 Some(name) => changed.push(name.clone()),
                 None => log(&format!("{file}: changed, but no menu uses that name; ignored")),
             }

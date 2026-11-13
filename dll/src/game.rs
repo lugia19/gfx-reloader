@@ -7,7 +7,7 @@ use std::ffi::c_void;
 
 /// Menu table: 109 entries of 16 bytes {int layer, byte resident (+4), wchar* name (+8)}, filled at startup.
 pub const MENU_TABLE: usize = 0x144e28cf0;
-pub const MENU_TABLE_COUNT: usize = 0x6d;
+pub const MENU_TABLE_COUNT: usize = 109;
 /// `[[SCALEFORM_HOLDER] + 8]` = CSScaleformSystem.
 const SCALEFORM_HOLDER: usize = 0x144e28818;
 /// The system's movie cache (std::map, head node pointer at +0x9c0). Nodes: key chars +0x28 / length +0x30, cached
@@ -91,6 +91,10 @@ pub fn menu_names() -> Vec<String> {
     (0..MENU_TABLE_COUNT).map(|i| unsafe { name_at(MENU_TABLE + i * 16 + 8) }).collect()
 }
 
+pub fn menu_index(name: &str) -> Option<usize> {
+    (0..MENU_TABLE_COUNT).find(|i| unsafe { name_at(MENU_TABLE + i * 16 + 8) } == name)
+}
+
 pub fn scaleform_system() -> usize {
     let holder: usize = unsafe { read(SCALEFORM_HOLDER) };
     if holder == 0 { 0 } else { unsafe { read(holder + 8) } }
@@ -126,14 +130,11 @@ pub unsafe fn cache_node(system: usize, name: &str) -> Option<usize> {
 /// Lets the file opener read menu files from disk when they aren't in the repository (after boot, none are).
 pub fn patch_disk_fallback() -> Result<(), String> {
     let site = DISK_FALLBACK_JNZ as *mut u8;
+    if check_bytes(DISK_FALLBACK_JNZ, &[0x90; 6]).is_ok() {
+        return Ok(());
+    }
+    check_bytes(DISK_FALLBACK_JNZ, &DISK_FALLBACK_ORIGINAL)?;
     unsafe {
-        let current: [u8; 6] = std::ptr::read(site as *const [u8; 6]);
-        if current == [0x90; 6] {
-            return Ok(());
-        }
-        if current != DISK_FALLBACK_ORIGINAL {
-            return Err(format!("unexpected bytes at {DISK_FALLBACK_JNZ:#x}: {current:02x?} (not 1.09.1?)"));
-        }
         let mut old = 0u32;
         VirtualProtect(site as *mut c_void, 6, 0x40, &mut old);
         std::ptr::write(site as *mut [u8; 6], [0x90; 6]);

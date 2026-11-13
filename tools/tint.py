@@ -96,8 +96,10 @@ def tint_place(body, code, rgb, add_rgb=None):
     return None
 
 
-def rebuild(data, start, end, rgb, counter, nested, add_rgb=None):
+def rebuild(data, start, end, rgb, nested, add_rgb=None):
+    """(rebuilt tag stream, number of placements tinted)."""
     out = bytearray()
+    tinted = 0
     pos = start
     while pos < end:
         header = struct.unpack_from('<H', data, pos)[0]
@@ -110,12 +112,14 @@ def rebuild(data, start, end, rgb, counter, nested, add_rgb=None):
         body = data[pos:pos + length]
         pos += length
         if code == 39:
-            body = body[:4] + rebuild(data, pos - length + 4, pos, rgb, counter, True, add_rgb)
+            sprite, count = rebuild(data, pos - length + 4, pos, rgb, True, add_rgb)
+            body = body[:4] + sprite
+            tinted += count
         elif code in (26, 70):
             new = tint_place(body, code, rgb, add_rgb)
             if new is not None:
                 body = new
-                counter[0] += 1
+                tinted += 1
         if long_form or len(body) >= 63:
             out += struct.pack('<HI', (code << 6) | 63, len(body))
         else:
@@ -125,7 +129,7 @@ def rebuild(data, start, end, rgb, counter, nested, add_rgb=None):
             break
     if not nested:
         out += data[pos:end]  # anything after the End tag, kept as is
-    return bytes(out)
+    return bytes(out), tinted
 
 
 def stock_path(name):
@@ -162,13 +166,13 @@ def main():
     tags_start = 8 + (5 + 4 * nbits + 7) // 8 + 4
     rgb = [int(args.color[i:i + 2], 16) * 256 // 255 for i in (0, 2, 4)]
     add_rgb = [int(args.add[i:i + 2], 16) for i in (0, 2, 4)] if args.add else None
-    counter = [0]
-    out = bytearray(data[:tags_start] + rebuild(data, tags_start, len(data), rgb, counter, False, add_rgb))
+    tags, tinted = rebuild(data, tags_start, len(data), rgb, False, add_rgb)
+    out = bytearray(data[:tags_start] + tags)
     struct.pack_into('<I', out, 4, len(out))
     with open(target, 'wb') as f:
         f.write(out)
     added = f' + {args.add}' if args.add else ''
-    print(f'{target}: {counter[0]} placements tinted {args.color}{added} ({len(data)} -> {len(out)} bytes)')
+    print(f'{target}: {tinted} placements tinted {args.color}{added} ({len(data)} -> {len(out)} bytes)')
 
 
 if __name__ == '__main__':

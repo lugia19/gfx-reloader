@@ -1,7 +1,7 @@
 """Finds the menu window object that owns a menu's player in the running game, by scanning writable memory for the
 player pointer (taken from the probe log's last "open <name>" line).
 
-    python -I tools/find_window.py 01_GarageTopMenu
+    python -I probe-dll/tools/find_window.py 01_GarageTopMenu
 
 Every hit is printed with the window candidates it implies: main-menu windows (0x140d61b3e: player +0x68, entry copy
 +0x58, name pointer +0x60) and panel windows (0x140c8acf0: player +0x60, entry copy +0x48, name +0x50). For each
@@ -10,7 +10,7 @@ candidate whose name pointer matches, it dumps the first 0x150 bytes as qwords (
 import ctypes, re, struct, subprocess, sys
 from ctypes import wintypes
 
-LOG = r'D:\SteamLibrary\steamapps\common\ARMORED CORE VI FIRES OF RUBICON\Game\debug-logs\ui_hot_reload.log'
+LOG = r'D:\SteamLibrary\steamapps\common\ARMORED CORE VI FIRES OF RUBICON\Game\debug-logs\ui_hot_reload_probe.log'
 # (description, offset of the player in the window, offset of the name pointer in the window)
 LAYOUTS = [('main-menu window (player +0x68)', 0x68, 0x60), ('panel window (player +0x60)', 0x60, 0x50)]
 

@@ -8,10 +8,11 @@
 //!    movie: preview only);
 //! 3. a live self-owned window with that movie is closed with its own close and reopened by its step in the same
 //!    frame, keeping its creator's close check;
-//! 4. if no window picked it up within half a second, the menu isn't on screen: it loads the new file next time.
+//! 4. if no window picked it up once every live window has stepped (the first window to step after the request steps
+//!    again), the menu isn't on screen: it loads the new file next time.
 
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::game::*;
@@ -26,17 +27,35 @@ pub static ORIG_WINDOW_STEP: AtomicUsize = AtomicUsize::new(0);
 pub static ORIG_PANEL_OPEN: AtomicUsize = AtomicUsize::new(0);
 pub static ORIG_PANEL_CLOSE: AtomicUsize = AtomicUsize::new(0);
 
+/// Set while there are requests or menus waiting for their window, so the per-frame hook does nothing otherwise.
+static PENDING: AtomicBool = AtomicBool::new(false);
 /// Menu names asked for by F7 / the watcher, not yet handled on the game thread.
 static REQUESTS: Mutex<Vec<String>> = Mutex::new(Vec::new());
-/// Menus waiting for their live self-owned window to step: (name, since, a panel already showed it).
-static WAITING: Mutex<Vec<(String, Instant, bool)>> = Mutex::new(Vec::new());
+/// Menus waiting for their live self-owned window to step, until every live window has had its step.
+static ROUND: Mutex<Option<Round>> = Mutex::new(None);
 /// Live embedded panels: (panel window, menu name), kept by the panel open/close hooks.
 static PANELS: Mutex<Vec<(usize, String)>> = Mutex::new(Vec::new());
 
-const WAIT_FOR_WINDOW: Duration = Duration::from_millis(500);
+/// Only in case the round's first window closes and never steps again.
+const ROUND_SAFETY_CAP: Duration = Duration::from_secs(2);
+
+struct Waiting {
+    name: String,
+    /// A panel already showed the new movie (so "not on screen" would be wrong).
+    previewed: bool,
+}
+
+struct Round {
+    /// The window that stepped when the requests were handled: when it steps again, every live window has stepped.
+    first_window: usize,
+    started: Instant,
+    waiting: Vec<Waiting>,
+}
 
 pub fn request(names: Vec<String>) {
-    REQUESTS.lock().unwrap().extend(names);
+    let mut requests = REQUESTS.lock().unwrap();
+    requests.extend(names);
+    PENDING.store(true, Ordering::Relaxed);
 }
 
 fn original(slot: &AtomicUsize) -> WindowFn {
@@ -47,14 +66,12 @@ fn original(slot: &AtomicUsize) -> WindowFn {
 
 /// Self-owned window step (0x140d61af0), every live window, every frame.
 pub unsafe extern "system" fn window_step_hook(window: usize, out: usize, p3: usize, p4: usize) -> usize {
-    unsafe { handle_requests() };
-    let reloading = unsafe { take_waiting_for(window) };
-    let result = match reloading {
-        Some(name) => unsafe { reload_window(window, &name, out, p3, p4) },
-        None => unsafe { original(&ORIG_WINDOW_STEP)(window, out, p3, p4) },
-    };
-    expire_waiting();
-    result
+    if PENDING.load(Ordering::Relaxed) {
+        if let Some(name) = unsafe { next_reload(window) } {
+            return unsafe { reload_window(window, &name, out, p3, p4) };
+        }
+    }
+    unsafe { original(&ORIG_WINDOW_STEP)(window, out, p3, p4) }
 }
 
 pub unsafe extern "system" fn panel_open_hook(panel: usize, a: usize, b: usize, c: usize) -> usize {
@@ -74,22 +91,61 @@ pub unsafe extern "system" fn panel_close_hook(panel: usize, a: usize, b: usize,
 
 // ---- game-thread work -----------------------------------------------------------------------------------------------
 
-unsafe fn handle_requests() {
+/// Game thread, while something is pending: ends the current round if every live window has stepped, handles new
+/// requests, and returns the menu to reload if `window` is the live window one of them is waiting for.
+unsafe fn next_reload(window: usize) -> Option<String> {
+    let mut round = ROUND.lock().unwrap();
+    if round.as_ref().is_some_and(|r| r.first_window == window || r.started.elapsed() > ROUND_SAFETY_CAP) {
+        for menu in round.take().unwrap().waiting {
+            if !menu.previewed {
+                log(&format!("{}: not on screen right now; the new file is used the next time it opens", menu.name));
+            }
+        }
+    }
+    let new = unsafe { handle_requests() };
+    if !new.is_empty() {
+        round.get_or_insert_with(|| Round { first_window: window, started: Instant::now(), waiting: Vec::new() })
+            .waiting
+            .extend(new);
+    }
+    let Some(current) = round.as_mut() else {
+        // nothing waiting: go idle unless a request arrived meanwhile (checked under the lock request() uses)
+        let requests = REQUESTS.lock().unwrap();
+        PENDING.store(!requests.is_empty(), Ordering::Relaxed);
+        return None;
+    };
+    let name = unsafe { name_at(window + WINDOW_NAME) };
+    let index = current.waiting.iter().position(|m| m.name.eq_ignore_ascii_case(&name))?;
+    let menu = current.waiting.remove(index);
+    let live = unsafe { read::<usize>(window + WINDOW_CONTROLLER) } != 0
+        && unsafe { read::<usize>(window + WINDOW_FACTORY) } != 0;
+    if !live {
+        log(&format!("{}: opening right now; it uses the new file", menu.name));
+        return None;
+    }
+    Some(menu.name)
+}
+
+/// Releases each requested movie and reloads its live panels; returns the menus that now wait for their window.
+unsafe fn handle_requests() -> Vec<Waiting> {
     let requests = std::mem::take(&mut *REQUESTS.lock().unwrap());
     if requests.is_empty() {
-        return;
+        return Vec::new();
     }
     let system = scaleform_system();
     if system == 0 {
         log("reload skipped: the menu system isn't up yet");
-        return;
+        return Vec::new();
     }
-    for name in requests {
-        unsafe { release_cached(system, &name) };
-        unsafe { drop_repository_leftovers(system, &name) };
-        let previewed = unsafe { reload_panels(&name) };
-        WAITING.lock().unwrap().push((name, Instant::now(), previewed));
-    }
+    requests
+        .into_iter()
+        .map(|name| {
+            unsafe { release_cached(system, &name) };
+            unsafe { drop_repository_leftovers(system, &name) };
+            let previewed = unsafe { reload_panels(&name) };
+            Waiting { name, previewed }
+        })
+        .collect()
 }
 
 /// Drops the cache's reference to a menu's movie (refcount at +8; at zero, vtable slot 0 destroys it) and empties the
@@ -112,7 +168,7 @@ unsafe fn release_cached(system: usize, name: &str) {
 /// the repository with an already-used file object. Loading that instead of the disk file kills the game.
 unsafe fn drop_repository_leftovers(system: usize, name: &str) {
     let repository: usize = unsafe { read(REPOSITORY) };
-    let Some(index) = menu_names().iter().position(|n| n == name) else { return };
+    let Some(index) = menu_index(name) else { return };
     if repository == 0 {
         return;
     }
@@ -160,23 +216,6 @@ unsafe fn reload_panels(name: &str) -> bool {
     true
 }
 
-unsafe fn take_waiting_for(window: usize) -> Option<String> {
-    let mut waiting = WAITING.lock().unwrap();
-    if waiting.is_empty() {
-        return None;
-    }
-    let name = unsafe { name_at(window + WINDOW_NAME) };
-    let index = waiting.iter().position(|(n, _, _)| n.eq_ignore_ascii_case(&name))?;
-    let live = unsafe { read::<usize>(window + WINDOW_CONTROLLER) } != 0
-        && unsafe { read::<usize>(window + WINDOW_FACTORY) } != 0;
-    let name = waiting.remove(index).0;
-    if !live {
-        log(&format!("{name}: opening right now; it uses the new file"));
-        return None;
-    }
-    Some(name)
-}
-
 /// Closes the window with its own close, then lets the original step reopen it (no controller + factory = open), which
 /// looks the movie up again: the cache is empty, so the file is read from disk.
 unsafe fn reload_window(window: usize, name: &str, out: usize, p3: usize, p4: usize) -> usize {
@@ -200,17 +239,4 @@ unsafe fn reload_window(window: usize, name: &str, out: usize, p3: usize, p4: us
         log(&format!("{name}: warning: closed but didn't reopen; it should come back the next time it opens"));
     }
     result
-}
-
-fn expire_waiting() {
-    let mut waiting = WAITING.lock().unwrap();
-    waiting.retain(|(name, since, previewed)| {
-        if since.elapsed() < WAIT_FOR_WINDOW {
-            return true;
-        }
-        if !previewed {
-            log(&format!("{name}: not on screen right now; the new file is used the next time it opens"));
-        }
-        false
-    });
 }

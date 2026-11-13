@@ -41,7 +41,7 @@ pub fn log(line: &str) {
 /// `package = <folder>` from ui_hot_reload.ini, next to the DLL or in one of its parent folders.
 fn package_from_config(dll: &Path) -> Option<PathBuf> {
     let Some(ini) = dll.ancestors().skip(1).map(|d| d.join("ui_hot_reload.ini")).find(|p| p.is_file()) else {
-        log("no ui_hot_reload.ini found next to the DLL (or in a folder above it); nothing to watch");
+        log("no ui_hot_reload.ini found next to the DLL (or in a folder above it); F7/F8 do nothing");
         return None;
     };
     let text = std::fs::read_to_string(&ini).unwrap_or_default();
@@ -53,7 +53,7 @@ fn package_from_config(dll: &Path) -> Option<PathBuf> {
         .find(|(key, _)| key.trim() == "package")
         .map(|(_, value)| PathBuf::from(value.trim()));
     if package.is_none() {
-        log(&format!("{}: no `package = ...` line; nothing to watch", ini.display()));
+        log(&format!("{}: no `package = ...` line; F7/F8 do nothing", ini.display()));
     }
     package
 }
@@ -88,7 +88,11 @@ fn reload_changes(files: &mut files::MenuFiles) {
     reload::request(names);
 }
 
-fn key_loop(mut files: Option<files::MenuFiles>) {
+/// Own thread: reads the config and snapshots the package (kept out of DllMain), then polls F7/F8 and the watcher.
+fn key_loop(dll: PathBuf) {
+    let Some(package) = package_from_config(&dll) else { return };
+    let mut files = files::MenuFiles::new(&package);
+    log("ready: F7 reloads changed menu files, F8 turns the file watcher on/off (off now)");
     let mut was_down = [false; 2];
     let mut watching = false;
     let mut last_poll = Instant::now();
@@ -96,23 +100,19 @@ fn key_loop(mut files: Option<files::MenuFiles>) {
         for (i, key) in [VK_F7, VK_F8].into_iter().enumerate() {
             let down = unsafe { GetAsyncKeyState(key) } as u16 & 0x8000 != 0;
             if down && !was_down[i] {
-                match (key, files.as_mut()) {
-                    (_, None) => log("no package configured (ui_hot_reload.ini); keys do nothing"),
-                    (VK_F7, Some(files)) => reload_changes(files),
-                    _ => {
-                        watching = !watching;
-                        log(if watching { "file watcher ON" } else { "file watcher OFF" });
-                    }
+                if key == VK_F7 {
+                    reload_changes(&mut files);
+                } else {
+                    watching = !watching;
+                    log(if watching { "file watcher ON" } else { "file watcher OFF" });
                 }
             }
             was_down[i] = down;
         }
         if watching && last_poll.elapsed() >= WATCH_INTERVAL {
             last_poll = Instant::now();
-            if let Some(files) = files.as_mut() {
-                if files.changes_settled() {
-                    reload_changes(files);
-                }
+            if files.changes_settled() {
+                reload_changes(&mut files);
             }
         }
         std::thread::sleep(Duration::from_millis(50));
@@ -140,9 +140,8 @@ extern "system" fn DllMain(module: *mut u8, reason: u32, _reserved: *mut u8) -> 
         }
         match install() {
             Ok(()) => {
-                let files = package_from_config(&dll_path(module)).map(|p| files::MenuFiles::new(&p));
-                log("ready: F7 reloads changed menu files, F8 turns the file watcher on/off (off now)");
-                std::thread::spawn(move || key_loop(files));
+                let dll = dll_path(module);
+                std::thread::spawn(move || key_loop(dll));
             }
             Err(e) => log(&format!("not started: {e}")),
         }

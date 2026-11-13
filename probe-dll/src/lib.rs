@@ -17,7 +17,7 @@
 //!   package = <me3 package folder whose menu\ is watched>
 //!   disk_fallback = boot | on_reload     (boot: patch at load, before the game's boot requests)
 //!
-//! Log: Game\debug-logs\ui_hot_reload.log. Lookups, menu opens (player reused or new), loads, CreateMovie results
+//! Log: Game\debug-logs\ui_hot_reload_probe.log. Lookups, menu opens (player reused or new), loads, CreateMovie results
 //! (flagging an unchanged MovieDef, i.e. Scaleform's library cache), OpenFile with where the file came from
 //! (repository / disk / failed), file requests, and Scaleform's own log messages.
 
@@ -974,7 +974,7 @@ extern "system" fn DllMain(module: *mut u8, reason: u32, _reserved: *mut u8) -> 
         let dir = log_dir();
         let _ = std::fs::create_dir_all(&dir);
         let _ = START.set(Instant::now());
-        if let Ok(file) = std::fs::File::create(dir.join("ui_hot_reload.log")) {
+        if let Ok(file) = std::fs::File::create(dir.join("ui_hot_reload_probe.log")) {
             let _ = LOG.set(Mutex::new(file));
         }
         match init(module) {
