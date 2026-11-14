@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::game::*;
-use crate::{TOAST_LINE, log, toast};
+use crate::{TOAST_LINE, TOAST_LONG_SECONDS, log, toast, toast_for};
 
 /// Window step, window close, panel open, panel close: (object, three more arguments).
 type WindowFn = unsafe extern "system" fn(usize, usize, usize, usize) -> usize;
@@ -91,7 +91,7 @@ pub fn request_list() {
 /// Logs a warning and shows it as a toast.
 fn warn(text: &str) {
     log(&format!("warning: {text}"));
-    toast(text);
+    toast_for(text, TOAST_LONG_SECONDS);
 }
 
 /// "Reloaded 3 menus (1 preview only, broken until the next scene change)".
@@ -128,7 +128,7 @@ unsafe fn list_on_screen(system: usize) {
     }
     let total = lines.len();
     for (i, line) in lines.iter().enumerate() {
-        toast(&format!("UI on screen ({}/{total}): {line}", i + 1));
+        toast_for(&format!("UI on screen ({}/{total}): {line}", i + 1), TOAST_LONG_SECONDS);
     }
 }
 

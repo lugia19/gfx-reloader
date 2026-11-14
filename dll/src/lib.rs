@@ -44,10 +44,22 @@ pub fn log(line: &str) {
     }
 }
 
-/// Shows a one-line message in the game's announce banner if toast_wrapper.dll is loaded (does nothing otherwise).
-/// Messages queue and stay up about 13 s each (the game's timing), so keep them few.
+/// Seconds a message stays in the announce banner: status lines, and lines that take reading (warnings, lists).
+const TOAST_SECONDS: f32 = 4.0;
+pub const TOAST_LONG_SECONDS: f32 = 8.0;
+
+/// Shows a one-line status message in the game's announce banner if toast_wrapper.dll is loaded (does nothing
+/// otherwise). Messages queue, so keep them few.
 pub fn toast(text: &str) {
-    toast_wrapper_client::show(text);
+    toast_for(text, TOAST_SECONDS);
+}
+
+/// `toast` with its time on screen. A toast_wrapper.dll older than 0.4 has no durations: the game's timing (about
+/// 13 s) is used then.
+pub fn toast_for(text: &str, seconds: f32) {
+    if !toast_wrapper_client::show_for(text, seconds) {
+        toast_wrapper_client::show(text);
+    }
 }
 
 /// The package folder to watch, first found of: `package = <folder>` from a ui_hot_reload.ini next to the DLL; the
