@@ -123,11 +123,15 @@ fn install() -> Result<&'static game::Game, String> {
     Ok(game)
 }
 
-fn reload_changes(files: &mut files::MenuFiles) {
+/// Reloads the menus whose files changed. `asked` = the user pressed F7, so "nothing changed" is worth saying; the
+/// watcher stays quiet about it (it also wakes up for deleted files and for files that aren't menus).
+fn reload_changes(files: &mut files::MenuFiles, asked: bool) {
     let names = files.take_changes();
     if names.is_empty() {
-        log("no changed menu files");
-        toast("No changed menu files");
+        if asked {
+            log("no changed menu files");
+            toast("No changed menu files");
+        }
         return;
     }
     log(&format!("reloading {}", names.join(", ")));
@@ -147,7 +151,7 @@ fn key_loop(dll: PathBuf) {
             let down = unsafe { GetAsyncKeyState(key) } as u16 & 0x8000 != 0;
             if down && !was_down[i] {
                 match key {
-                    VK_F7 => reload_changes(&mut files),
+                    VK_F7 => reload_changes(&mut files, true),
                     VK_F8 => {
                         watching = !watching;
                         log(if watching { "file watcher ON" } else { "file watcher OFF" });
@@ -161,7 +165,7 @@ fn key_loop(dll: PathBuf) {
         if watching && last_poll.elapsed() >= WATCH_INTERVAL {
             last_poll = Instant::now();
             if files.changes_settled() {
-                reload_changes(&mut files);
+                reload_changes(&mut files, false);
             }
         }
         std::thread::sleep(Duration::from_millis(50));

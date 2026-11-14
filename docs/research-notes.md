@@ -212,3 +212,16 @@ but showed the old HUD. A script-written file (fresh modification time) reloaded
   size). It now compares a hash of the contents, for F7 and the watcher (the watcher reads every package file twice
   a second while on; the full test packages are 7 and 16 MB). Tested: ER HUD swapped for one with identical size and
   timestamp, picked up by the watcher.
+
+## Swapping a file by hand (2026-11-14, fixed in 0.1.2)
+
+Seen in a kit session's log with the watcher on: paste a copy (`01_000_fe_green.gfx`) into `menu`, delete
+`01_000_fe.gfx`, rename the copy. The tool compared against its last snapshot, so the file that came back was "new
+since the game started: restart" and wasn't reloaded; the waiting copy got the same toast, and each watcher wake-up
+with nothing to do said "No changed menu files".
+
+- "New" now means "not in the package when the game started" (what me3 serves); a file from launch that comes back
+  is a change. File names are compared in lowercase.
+- A changed file whose name no menu uses is only logged.
+- The watcher says nothing when it finds nothing to reload; F7 still does.
+- Tested (ER, watcher on): paste, delete, rename gave one log line for the copy and one reload.

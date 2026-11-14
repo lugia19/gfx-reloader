@@ -34,16 +34,14 @@ package = C:\path\to\your\package
 
 ## What you'll see
 
-The examples are from Armored Core VI; Elden Ring behaves the same way (title screen and HUD reload instantly, the
-title logo is a panel).
-
-- **Menus on screen** (garage menus, the HUD in a mission, fades, captions): reloaded instantly.
+- **Menus on screen** (AC6: garage menus, the HUD in a mission, fades, captions; Elden Ring: the title screen, the
+  HUD): reloaded instantly.
 - **Menus not on screen**: they use the new file the next time they open.
-- **Panels** (the license panel, Assembly's stat panels, some backgrounds): you see the new shapes and colors right
-  away, but their text, numbers and buttons stop updating until the game rebuilds them, which happens on the next
-  scene change (entering or leaving a mission or AC TEST). Two background panels, `01_MenuCommonBG` and
-  `02_OnlineArena_CommonBG`, are only rebuilt when you return to the title screen. The log tells you when a panel
-  was only previewed.
+- **Panels** (AC6: the license panel, Assembly's stat panels, some backgrounds; Elden Ring: the title logo, the
+  rune counter): you see the new shapes and colors right away, but their text, numbers and buttons stop updating
+  until the game rebuilds them, which happens on the next scene change (in AC6, entering or leaving a mission or
+  AC TEST). Two AC6 background panels, `01_MenuCommonBG` and `02_OnlineArena_CommonBG`, are only rebuilt when you
+  return to the title screen. The log tells you when a panel was only previewed.
 
 ## Limits
 
