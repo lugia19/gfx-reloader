@@ -11,7 +11,8 @@ engine; AC6's exe has none), each matched to AC6 by layout and code: see [er-por
 - At boot the game **requests all menu files** into an in-memory file repository (`[0x144e245b0]`). The game's
   Scaleform file opener (`0x1415f40b0`) only reads from there, and each file is dropped from it once its movie is
   built. After boot, the files are gone from memory, and the opener's own disk read is switched off (a `jnz` at
-  `0x1415f427d`), so a menu file can't be opened a second time.
+  `0x1415f427d`), so a menu file can't be opened a second time. The switch is the engine's debug property
+  `Scaleform.SwfCache` (true: use the repository): a constant in AC6, read at run time in Elden Ring.
 - me3 replaces the path of every file it overrides with a token (`\\me3??54`); stock files keep their archive path
   (`data0:/menu/01_900_black.gfx`).
 - Built movies are **cached** by the scaleform system (`[[0x144e28818]+8]`, cache map at `+0x9b8`; probably ER's
@@ -59,9 +60,10 @@ share their time, and two recolors of one menu can have the same size).
 
 Same engine, same four steps, same hook (addresses in [er-port.md](er-port.md)). What differs is the store the hook
 bypasses: ER's (`CS::GfxRepositoryImp`) **keeps** the boot copy of every menu file, and its file opener
-(`CS::CSScaleformFileOpener`, `0x140d6e970`) has no disk read for menu files at all, so without the hook a released
-movie is rebuilt from the boot copy. The default opener is `0x141159f50`. ER's store is left alone (it keeps its
-entries in the stock game too).
+(`CS::CSScaleformFileOpener`, `0x140d6e970`) only reads from disk when `Scaleform.SwfCache` is false, which it
+isn't by default, so without the hook a released movie is rebuilt from the boot copy. The default opener, which
+that false branch also calls, is `0x141159f50`. ER's store is left alone (it keeps its entries in the stock game
+too).
 
 - AC6's panel open and close also keep a per-name count in the menu manager; ER's don't, so there the tool closes a
   panel by hand (close the player, clear the panel's field).

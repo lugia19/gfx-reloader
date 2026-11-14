@@ -20,10 +20,11 @@ pub enum MapKey {
 }
 
 /// The game's scaleform file opener (`CS::CSScaleformFileOpener`, vtable +8) serves menu files from a store filled at
-/// boot and never reads an edited file: Elden Ring's store (`CS::GfxRepositoryImp`) keeps every file and there is no
-/// disk read on that path; AC6's empties as movies open and its disk read is switched off. The tool hooks the opener
-/// and sends every path that isn't an archive path (a mod's file) to Scaleform's default opener, which reads the file
-/// itself. Both take (this, utf-8 url, flags, mode) -> file.
+/// boot and never reads an edited file: its disk read is behind the debug property `Scaleform.SwfCache`, which is
+/// on (a constant in AC6, the default in Elden Ring). Elden Ring's store (`CS::GfxRepositoryImp`) keeps every file;
+/// AC6's empties as movies open. The tool hooks the opener and sends every path that isn't an archive path (a mod's
+/// file) to Scaleform's default opener, which reads the file itself. Both take (this, utf-8 url, flags, mode) ->
+/// file.
 pub struct FileOpener {
     pub open: Code,
     pub default_open: Code,

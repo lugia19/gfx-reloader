@@ -164,7 +164,8 @@ One DLL for both games (game detected at load by exe name, addresses in a per-ga
 
 ## One file opener hook for both games (2026-11-14)
 
-The ER port needed a hook on the file opener (ER has no disk read to re-enable). AC6 then moved to the same hook,
+The ER port got a hook on the file opener (written when ER was thought to have no disk read; it has one, behind
+the `Scaleform.SwfCache` property, see below and er-port.md). AC6 then moved to the same hook,
 which replaced the disk-fallback patch and the leftover purge described above.
 
 - AC6 has the same Scaleform default file opener as ER: `0x141a7bfb0`, the only match for the first 40 bytes of
@@ -180,9 +181,12 @@ which replaced the disk-fallback patch and the leftover purge described above.
   (`0x14153dc50`), then, if `0x14171da90` returns true, release `0x1416040c0`(system = opener `+0x18`, entry). The
   same call gates the disk read on a miss (the `jnz`). `0x14171da90` is a stub that returns 1 (thunk to
   `0x14120759a`: `return 1`), called from eleven places in the scaleform system (movie lookup, opener, the boot
-  request code): a build-time setting compiled to a constant, probably "use the file repository" (a development
-  build would return false: entries kept, misses read from disk; not confirmed). So in this exe the release always
-  happens, and the hook releasing unconditionally matches the game.
+  request code). It is the debug property `Scaleform.SwfCache` (true = use the file repository) with its answer
+  fixed: Elden Ring reads the same property at run time in the same place (getter `0x141ee7540`, see er-port.md),
+  and the developers' property list says false reloads the swf each time a menu is launched. AC6's
+  `Scaleform.SwfCache` string (`0x143b5c0c0`) is only referenced from obfuscated code, so whether AC6 can still read
+  it somewhere wasn't checked. In this exe the release always happens, and the hook releasing unconditionally
+  matches the game.
 - The hook's lookup with the me3 token finds the entries. Boot with the full package: 107 disk reads, 104 entries
   gone after one release, 2 still there (`01_070_CommandList` and `01_900_Black`, requested twice: their second
   copies, as in the stock game). One later open (157 s) had no entry left, as expected.

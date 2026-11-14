@@ -57,12 +57,19 @@ addresses here.
 
 ## Reading edited files in ER (confirmed in game)
 
-ER has an in-memory store like AC6's, but it behaves differently, so AC6's fix doesn't carry over.
+ER has the same in-memory store and the same switch as AC6, with one difference in how the store behaves.
 
-- OpenFile (`0x140d6e970`) checks the path with `[0x14458fb68]` (call `0x141ee7540` at `0x140d6ea36`). Not found ->
-  Scaleform's default file opener `0x141159f50` (reads the file itself). Found (every menu file) -> the store
-  `CS::GfxRepositoryImp` (`[0x143d83888]`): lookup `0x140cea560` (map at `repo+0x78`), then `0x140ceb070` builds a
-  memory file from `entry+0x78`/`+0x80`. A miss there returns 0: **no disk read on that path**.
+- OpenFile (`0x140d6e970`) reads the debug property **`Scaleform.SwfCache`** (default true): it builds that name and
+  calls the property getter `0x141ee7540` on the debug properties `[0x14458fb68]` (at `0x140d6ea36`). False ->
+  Scaleform's default file opener `0x141159f50` (reads the file itself). True -> the store `CS::GfxRepositoryImp`
+  (`[0x143d83888]`): lookup `0x140cea560` (map at `repo+0x78`), then `0x140ceb070` builds a memory file from
+  `entry+0x78`/`+0x80`; a miss there returns 0. The developers' property list describes it: set to false, the swf
+  is reloaded each time the menu is launched. So ER does have a disk path; it is off by default.
+- **Correction (2026-11-14):** these notes first called the property read a "path check" and the string "a memory
+  container's name", and concluded that ER has no disk read. That was a misreading of unnamed code, pointed out in
+  the modding Discord with a named decompile. The addresses and the tests below are unaffected; the tool's hook
+  sends a mod's files to the same default opener the property's false branch uses. Not tried here: forcing the
+  property to false (it would reload a menu when it is reopened, not while it is on screen).
 - The store **keeps its entries** (AC6's are dropped as movies open), so a released movie was rebuilt from the boot
   copy: first test, a reloaded title screen stayed stock although me3 served the new file.
 - me3 replaces the path of each file it overrides with a token (`\\me3??54`); files from the archives keep theirs
