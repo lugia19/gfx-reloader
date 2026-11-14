@@ -27,6 +27,10 @@ pub enum MapKey {
 pub struct FileOpener {
     pub open: Code,
     pub default_open: Code,
+    /// The opener's "modification time of this file" (vtable +0x10; Scaleform's own, whole seconds): (this, utf-8
+    /// url) -> time. Scaleform identifies a loaded movie by its path and this time, and hands back the movie it has
+    /// when both match, without opening the file. The tool hooks it so a reloaded file never matches.
+    pub modify_time: Code,
     /// Where the game's opener releases a file's store entry after opening it (AC6), so the hook can do the same for
     /// the files it reads from disk. None where the store keeps its entries anyway (Elden Ring).
     pub store: Option<Store>,
@@ -80,7 +84,7 @@ impl Game {
     fn functions(&self) -> Vec<&Code> {
         let opener = &self.file_opener;
         let mut functions = vec![&self.window_step, &self.window_close, &self.panel_open, &self.player_close];
-        functions.extend([&opener.open, &opener.default_open]);
+        functions.extend([&opener.open, &opener.default_open, &opener.modify_time]);
         if let Some(store) = &opener.store {
             functions.extend([&store.lookup, &store.release]);
         }
@@ -111,6 +115,7 @@ const GAMES: [Game; 2] = [
         file_opener: FileOpener {
             open: Code { rva: 0x15f40b0, prologue: [0x40, 0x55, 0x56, 0x57, 0x41, 0x56, 0x41, 0x57] },
             default_open: Code { rva: 0x1a7bfb0, prologue: [0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c] },
+            modify_time: Code { rva: 0x1a7c080, prologue: [0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x74] },
             store: Some(Store {
                 repository: 0x4e245b0,
                 lookup: Code { rva: 0x153d3d0, prologue: [0x48, 0x83, 0xec, 0x38, 0x48, 0x89, 0x54, 0x24] },
@@ -139,6 +144,7 @@ const GAMES: [Game; 2] = [
         file_opener: FileOpener {
             open: Code { rva: 0xd6e970, prologue: [0x40, 0x55, 0x53, 0x56, 0x57, 0x41, 0x54, 0x41] },
             default_open: Code { rva: 0x1159f50, prologue: [0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c] },
+            modify_time: Code { rva: 0x115a020, prologue: [0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x74] },
             store: None,
         },
     },

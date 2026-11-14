@@ -193,3 +193,22 @@ which replaced the disk-fallback patch and the leftover purge described above.
 - Removed: the `jnz` patch (the tool no longer changes game code, it only hooks), the path builder call and the
   purge loop, and the per-game choice between two mechanisms. Kept, AC6 only: the lookup and release, now called
   once per disk read.
+
+## Same-second files and change detection (2026-11-14, fixed in 0.1.1)
+
+Found with the test kit: copying a recolored HUD over the package file in Explorer, then F7, logged "reloaded live"
+but showed the old HUD. A script-written file (fresh modification time) reloaded fine.
+
+- Cause: Scaleform keeps loaded movies by path and file modification time and reuses one when both match, without
+  opening the file. The time comes from the opener's vtable slot `+0x10` (AC6 `0x141a7c080`, ER `0x14115a020`):
+  Scaleform's own function in both games (it sits right after the default opener), whole seconds. The kit's files
+  were all written within 3 ms, and Explorer copies keep the source's time, so the new file had the loaded movie's
+  second. Confirmed: a file with a different size and a time 0.4 s later, same second, did not load (ER HUD).
+- Fix: hook that function; for a mod's file (not an archive path) return the real time plus the reload round
+  shifted left 32 bits, so nothing loaded after a reload can match a movie loaded before it. Tested: ER HUD with a
+  same-second copy (failed before, loads now); AC6 garage menu with the stock file's exact boot-time timestamp.
+- Change detection had the mirror problem: it compared modification time and size, so a replacement with the same
+  time and size was never noticed (files from one zip share their time; the blue and green test HUDs are the same
+  size). It now compares a hash of the contents, for F7 and the watcher (the watcher reads every package file twice
+  a second while on; the full test packages are 7 and 16 MB). Tested: ER HUD swapped for one with identical size and
+  timestamp, picked up by the watcher.

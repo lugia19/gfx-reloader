@@ -115,6 +115,7 @@ fn install() -> Result<&'static game::Game, String> {
     let game = game::detect()?;
     unsafe {
         hook(&game.file_opener.open, reload::open_file_hook as *const (), &reload::ORIG_OPEN_FILE)?;
+        hook(&game.file_opener.modify_time, reload::modify_time_hook as *const (), &reload::ORIG_MODIFY_TIME)?;
         hook(&game.window_step, reload::window_step_hook as *const (), &reload::ORIG_WINDOW_STEP)?;
         hook(&game.panel_open, reload::panel_open_hook as *const (), &reload::ORIG_PANEL_OPEN)?;
         hook(&game.player_close, reload::player_close_hook as *const (), &reload::ORIG_PLAYER_CLOSE)?;

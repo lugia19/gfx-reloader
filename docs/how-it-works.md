@@ -29,6 +29,11 @@ engine; AC6's exe has none), each matched to AC6 by layout and code: see [er-por
    does after opening from the repository, so the repository empties exactly as in the stock game.
 2. **Release.** For each changed menu it releases the cached movie (properly, so Scaleform frees it and doesn't hand
    it back). The next open of that menu loads the file again, through the hook.
+   Scaleform also keeps the movies it has loaded by path and file modification time, in whole seconds, and reuses
+   one when both match, without opening the file. A file copied over another keeps its source's time, so a
+   replaced file could look like the loaded movie. The tool hooks the opener's modification-time function
+   (`0x141a7c080`, vtable `+0x10`; ER `0x14115a020`) and, for a mod's file, adds an offset that grows with every
+   reload round, so a reloaded file never matches.
 3. **Reopen what's on screen.** Two kinds of windows:
    - **Self-owned windows** (`CS::MenuWindowJob`: garage menus, HUD, fades, captions...): each builds its own
      controller when it opens, through a factory `std::function` its creator passed in (`+0x70`/`+0xa8`). The tool
@@ -46,6 +51,9 @@ engine; AC6's exe has none), each matched to AC6 by layout and code: see [er-por
      scene change; the two background panels `01_MenuCommonBG` and `02_OnlineArena_CommonBG` only on return to the
      title screen).
 4. Menus that aren't on screen need nothing more: their next open reads the new file.
+
+Which files changed is decided by a hash of their contents, not by modification time or size (files from one zip
+share their time, and two recolors of one menu can have the same size).
 
 ## Elden Ring
 

@@ -12,7 +12,7 @@
 //!    again), the menu isn't on screen: it loads the new file next time.
 
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::game::*;
@@ -24,12 +24,18 @@ type WindowFn = unsafe extern "system" fn(usize, usize, usize, usize) -> usize;
 type OpenFileFn = unsafe extern "system" fn(usize, *const u8, usize, usize) -> usize;
 type StoreLookupFn = unsafe extern "system" fn(usize, *const u16) -> usize;
 type StoreReleaseFn = unsafe extern "system" fn(usize, usize) -> usize;
+type ModifyTimeFn = unsafe extern "system" fn(usize, *const u8) -> i64;
 type PlayerCloseFn = unsafe extern "system" fn(usize, usize) -> usize;
 
 pub static ORIG_WINDOW_STEP: AtomicUsize = AtomicUsize::new(0);
 pub static ORIG_PANEL_OPEN: AtomicUsize = AtomicUsize::new(0);
 pub static ORIG_PLAYER_CLOSE: AtomicUsize = AtomicUsize::new(0);
 pub static ORIG_OPEN_FILE: AtomicUsize = AtomicUsize::new(0);
+pub static ORIG_MODIFY_TIME: AtomicUsize = AtomicUsize::new(0);
+
+/// Counts the reload rounds. `modify_time_hook` adds it, shifted above any real time, to the modification time of a
+/// mod's file, so a file loaded after a reload never has the time of a movie loaded before it.
+static RELOAD_ROUND: AtomicI64 = AtomicI64::new(0);
 
 /// Whether a file opener path points into the game's archives: a named root, then `:/` (`data0:/menu/x.gfx`). A mod
 /// loader replaces the path of a file it overrides (me3: a token like `\\me3??54`), so anything else is a mod's
@@ -202,6 +208,18 @@ unsafe fn release_store_entry(opener: usize, path: &str) {
     }
 }
 
+/// The opener's modification time of a file (`FileOpener::modify_time`). Scaleform keeps the movies it has loaded by
+/// path and modification time, in whole seconds, and reuses one when both match, without opening the file: a file
+/// replaced by one with the same time (a copy keeps its source's time) would never load. So a mod's file gets a time
+/// that changes with every reload round. Archive files keep theirs.
+pub unsafe extern "system" fn modify_time_hook(this: usize, url: *const u8) -> i64 {
+    let time = unsafe { original::<ModifyTimeFn>(&ORIG_MODIFY_TIME)(this, url) };
+    if url.is_null() || is_archive_path(&unsafe { std::ffi::CStr::from_ptr(url.cast()) }.to_string_lossy()) {
+        return time;
+    }
+    time.wrapping_add(RELOAD_ROUND.load(Ordering::Relaxed) << 32)
+}
+
 // ---- game-thread work -----------------------------------------------------------------------------------------------
 
 /// Game thread, while something is pending: ends the current round if every live window has stepped, handles new
@@ -265,6 +283,7 @@ unsafe fn handle_requests() -> Vec<Waiting> {
         log("reload skipped: the menu system isn't up yet");
         return Vec::new();
     }
+    RELOAD_ROUND.fetch_add(1, Ordering::Relaxed);
     requests
         .into_iter()
         .map(|name| {

@@ -1,13 +1,24 @@
-//! The package's menu files: a snapshot of their modification times, what changed since, and the watcher.
+//! The package's menu files: a snapshot of their contents (as hashes), what changed since, and the watcher.
+//!
+//! Contents, not modification times: a file copied over another keeps its source's time, and files from one zip
+//! share theirs, so two different files can have the same time and size.
 
 use std::collections::HashMap;
+use std::hash::Hasher;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
 
 use crate::game::menu_names;
 use crate::log;
 
-type Stamps = HashMap<PathBuf, (SystemTime, u64)>;
+/// Hash of each file's contents. A file that can't be read right now (being written) is left out.
+type Stamps = HashMap<PathBuf, u64>;
+
+fn content_hash(path: &Path) -> Option<u64> {
+    let bytes = std::fs::read(path).ok()?;
+    let mut hasher = std::hash::DefaultHasher::new();
+    hasher.write(&bytes);
+    Some(hasher.finish())
+}
 
 pub struct MenuFiles {
     folder: PathBuf,
@@ -21,11 +32,12 @@ fn scan(dir: &Path, out: &mut Stamps) {
     let Ok(entries) = std::fs::read_dir(dir) else { return };
     for entry in entries.flatten() {
         let path = entry.path();
-        let Ok(meta) = entry.metadata() else { continue };
-        if meta.is_dir() {
+        if path.is_dir() {
             scan(&path, out);
         } else if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("gfx")) {
-            out.insert(path, (meta.modified().unwrap_or(SystemTime::UNIX_EPOCH), meta.len()));
+            if let Some(hash) = content_hash(&path) {
+                out.insert(path, hash);
+            }
         }
     }
 }
@@ -44,8 +56,16 @@ impl MenuFiles {
         Self { folder, snapshot, settling: None }
     }
 
+    /// The package now. A file that exists but can't be read at the moment keeps the hash it had, so it counts as
+    /// unchanged until it can be read (not as removed and then new).
     fn current(&self) -> Stamps {
-        stamps(&self.folder)
+        let mut now = stamps(&self.folder);
+        for (path, hash) in &self.snapshot {
+            if !now.contains_key(path) && path.exists() {
+                now.insert(path.clone(), *hash);
+            }
+        }
+        now
     }
 
     /// F7: menu names of the files changed since the last reload, and takes a new snapshot.
