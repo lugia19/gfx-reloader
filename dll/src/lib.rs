@@ -1,8 +1,8 @@
-//! ui-hot-reload: reload edited menu movies (.gfx) in the running game, for Armored Core VI and Elden Ring.
+//! gfx-reloader: reload edited menu movies (.gfx) in the running game, for Armored Core VI and Elden Ring.
 //! Usage: ../../README.md; how it works: ../../docs/how-it-works.md.
 //!
 //! F7 reloads the menu files that changed in the package since the last reload; F8 turns the file watcher on/off
-//! (off at start); F9 lists the menu movies on screen. Log: Game\debug-logs\ui_hot_reload.log. With
+//! (off at start); F9 lists the menu movies on screen. Log: Game\debug-logs\gfx_reloader.log. With
 //! toast_wrapper.dll (Toast-Wrapper) loaded, results also show in the game's announce banner.
 
 mod files;
@@ -62,21 +62,21 @@ pub fn toast_for(text: &str, seconds: f32) {
     }
 }
 
-/// The package folder to watch, first found of: `package = <folder>` from a ui_hot_reload.ini next to the DLL; the
-/// `mod` folder next to the DLL (the usual mod layout); a ui_hot_reload.ini in a folder above the DLL (development,
+/// The package folder to watch, first found of: `package = <folder>` from a gfx_reloader.ini next to the DLL; the
+/// `mod` folder next to the DLL (the usual mod layout); a gfx_reloader.ini in a folder above the DLL (development,
 /// where the DLL sits in dll\target\release).
 fn package_from_config(dll: &Path) -> Option<PathBuf> {
     let folder = dll.parent().unwrap_or(Path::new("."));
-    let ini_next_to_dll = folder.join("ui_hot_reload.ini");
+    let ini_next_to_dll = folder.join("gfx_reloader.ini");
     let ini = if ini_next_to_dll.is_file() {
         ini_next_to_dll
     } else if folder.join("mod").is_dir() {
         return Some(folder.join("mod"));
-    } else if let Some(ini) = folder.ancestors().skip(1).map(|d| d.join("ui_hot_reload.ini")).find(|p| p.is_file()) {
+    } else if let Some(ini) = folder.ancestors().skip(1).map(|d| d.join("gfx_reloader.ini")).find(|p| p.is_file()) {
         ini
     } else {
         log(&format!(
-            "no mod folder next to the DLL ({}) and no ui_hot_reload.ini pointing elsewhere; F7/F8 do nothing",
+            "no mod folder next to the DLL ({}) and no gfx_reloader.ini pointing elsewhere; F7/F8 do nothing",
             folder.join("mod").display()
         ));
         return None;
@@ -183,7 +183,7 @@ extern "system" fn DllMain(module: *mut u8, reason: u32, _reserved: *mut u8) -> 
             .and_then(|p| p.parent().map(|p| p.join("debug-logs")))
             .unwrap_or_else(|| "debug-logs".into());
         let _ = std::fs::create_dir_all(&logs);
-        if let Ok(file) = std::fs::File::create(logs.join("ui_hot_reload.log")) {
+        if let Ok(file) = std::fs::File::create(logs.join("gfx_reloader.log")) {
             let _ = LOG.set(Mutex::new(file));
         }
         match install() {

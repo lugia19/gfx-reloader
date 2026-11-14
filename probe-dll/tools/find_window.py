@@ -10,7 +10,7 @@ candidate whose name pointer matches, it dumps the first 0x150 bytes as qwords (
 import ctypes, re, struct, subprocess, sys
 from ctypes import wintypes
 
-LOG = r'D:\SteamLibrary\steamapps\common\ARMORED CORE VI FIRES OF RUBICON\Game\debug-logs\ui_hot_reload_probe.log'
+LOG = r'D:\SteamLibrary\steamapps\common\ARMORED CORE VI FIRES OF RUBICON\Game\debug-logs\gfx_reloader_probe.log'
 # (description, offset of the player in the window, offset of the name pointer in the window)
 LAYOUTS = [('main-menu window (player +0x68)', 0x68, 0x60), ('panel window (player +0x60)', 0x60, 0x50)]
 

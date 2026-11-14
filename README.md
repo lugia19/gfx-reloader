@@ -1,4 +1,4 @@
-# ui-hot-reload
+# gfx-reloader
 
 Edit a menu `.gfx` of your Armored Core VI or Elden Ring mod, press a key, and see the change in the running game.
 No restart.
@@ -8,15 +8,15 @@ The same DLL works in both games.
 
 ## Setup
 
-1. Put `ui_hot_reload.dll` next to your mod's package folder, named `mod` (the folder that contains `menu\`), and
+1. Put `gfx_reloader.dll` next to your mod's package folder, named `mod` (the folder that contains `menu\`), and
    add it to your me3 profile as a native:
    ```toml
    [[natives]]
-   path = 'ui_hot_reload.dll'
+   path = 'gfx_reloader.dll'
    ```
 2. Start the game through me3 as usual.
 
-If your package isn't a `mod` folder next to the DLL, put a `ui_hot_reload.ini` next to the DLL that points at it
+If your package isn't a `mod` folder next to the DLL, put a `gfx_reloader.ini` next to the DLL that points at it
 (a relative path is relative to the ini's folder):
 ```ini
 package = C:\path\to\your\package
@@ -27,7 +27,7 @@ package = C:\path\to\your\package
 - Edit and save any `menu\*.gfx` file in your package, then press **F7** in game.
 - Or press **F8** once to turn on the file watcher: every save is reloaded automatically. F8 again turns it off.
 - **F9** lists every menu movie on screen right now, marking the panels that can only be previewed (see below).
-- `Game\debug-logs\ui_hot_reload.log` says what happened to each menu. If
+- `Game\debug-logs\gfx_reloader.log` says what happened to each menu. If
   [Toast-Wrapper](https://github.com/lugia19/Toast-Wrapper) (`toast_wrapper.dll`) is in your profile too, the
   results also show in the game's announce banner ("Reloaded 3 menus (1 preview only, broken until the next scene
   change)").

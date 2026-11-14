@@ -1,4 +1,4 @@
-//! ui-hot-reload research probe (Armored Core VI 1.09.1, stock exe, me3 0.13.0): the first version of the tool, kept
+//! gfx-reloader research probe (Armored Core VI 1.09.1, stock exe, me3 0.13.0): the first version of the tool, kept
 //! for research. It reloads edited menu movies and logs enough to see what the game does with them. Findings:
 //! ..\..\docs\research-notes.md.
 //!
@@ -13,11 +13,11 @@
 //! - F9: dump the movie cache, the player map (+0x9d8) and the active player list (+0x9e8) at the next lookup.
 //! - F11: toggle the disk fallback patch.
 //!
-//! Config `ui_hot_reload.ini`, looked up next to the DLL and in its parent folders:
+//! Config `gfx_reloader.ini`, looked up next to the DLL and in its parent folders:
 //!   package = <me3 package folder whose menu\ is watched>
 //!   disk_fallback = boot | on_reload     (boot: patch at load, before the game's boot requests)
 //!
-//! Log: Game\debug-logs\ui_hot_reload_probe.log. Lookups, menu opens (player reused or new), loads, CreateMovie results
+//! Log: Game\debug-logs\gfx_reloader_probe.log. Lookups, menu opens (player reused or new), loads, CreateMovie results
 //! (flagging an unchanged MovieDef, i.e. Scaleform's library cache), OpenFile with where the file came from
 //! (repository / disk / failed), file requests, and Scaleform's own log messages.
 
@@ -360,7 +360,7 @@ fn scan_package() -> Option<HashMap<PathBuf, (SystemTime, u64)>> {
 /// F7: changed package files -> their menus are released at the next lookup.
 fn reload_changed() {
     let Some(now) = scan_package() else {
-        log("F7: no package configured (ui_hot_reload.ini: package = ...)");
+        log("F7: no package configured (gfx_reloader.ini: package = ...)");
         return;
     };
     let mut snapshot = SNAPSHOT.lock().unwrap();
@@ -895,10 +895,10 @@ fn key_loop() {
     }
 }
 
-/// `ui_hot_reload.ini` next to the DLL or in one of its parent folders.
+/// `gfx_reloader.ini` next to the DLL or in one of its parent folders.
 fn load_config(dll_path: &Path) -> Config {
-    let mut config = Config { package: None, fallback_at_boot: false, source: "no ui_hot_reload.ini found".into() };
-    let Some(file) = dll_path.ancestors().skip(1).map(|d| d.join("ui_hot_reload.ini")).find(|p| p.is_file()) else {
+    let mut config = Config { package: None, fallback_at_boot: false, source: "no gfx_reloader.ini found".into() };
+    let Some(file) = dll_path.ancestors().skip(1).map(|d| d.join("gfx_reloader.ini")).find(|p| p.is_file()) else {
         return config;
     };
     config.source = file.display().to_string();
@@ -975,7 +975,7 @@ extern "system" fn DllMain(module: *mut u8, reason: u32, _reserved: *mut u8) -> 
         let dir = log_dir();
         let _ = std::fs::create_dir_all(&dir);
         let _ = START.set(Instant::now());
-        if let Ok(file) = std::fs::File::create(dir.join("ui_hot_reload_probe.log")) {
+        if let Ok(file) = std::fs::File::create(dir.join("gfx_reloader_probe.log")) {
             let _ = LOG.set(Mutex::new(file));
         }
         match init(module) {

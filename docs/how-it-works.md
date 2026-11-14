@@ -1,4 +1,4 @@
-# How ui-hot-reload works
+# How gfx-reloader works
 
 Described for Armored Core VI 1.09.1; Elden Ring's differences are at the end. The full investigation, with every
 test and dead end, is in [research-notes.md](research-notes.md). Class names come from Elden Ring's RTTI (same

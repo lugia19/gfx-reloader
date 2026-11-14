@@ -3,7 +3,7 @@ package with the stock HUD, and colored HUD variants to swap in. Output: dist/gf
 
     python -I tools/make_test_kit.py
 
-Needs the built DLLs: dll/target/release/ui_hot_reload.dll and tests/toast-build/release/toast_wrapper.dll
+Needs the built DLLs: dll/target/release/gfx_reloader.dll and tests/toast-build/release/toast_wrapper.dll
 (docs/development.md says how to build the toast one).
 """
 import os, shutil, struct, sys
@@ -40,7 +40,7 @@ id = "gfx-reloader-test"
 path = 'mod'
 
 [[natives]]
-path = 'ui_hot_reload.dll'
+path = 'gfx_reloader.dll'
 
 [[natives]]
 path = 'toast_wrapper.dll'
@@ -75,7 +75,7 @@ in recolored HUDs and watch them change live. Armored Core VI 1.09.1, needs me3 
    F9 lists every menu on screen in the banner.
 5. To go back to stock, copy colored\\01_000_fe_stock.gfx over it the same way.
 
-If something goes wrong, send the log: <game folder>\\Game\\debug-logs\\ui_hot_reload.log
+If something goes wrong, send the log: <game folder>\\Game\\debug-logs\\gfx_reloader.log
 """
 
 
@@ -93,7 +93,7 @@ def make_hud(color, add, out):
 
 
 def main():
-    dll = os.path.join(ROOT, 'dll', 'target', 'release', 'ui_hot_reload.dll')
+    dll = os.path.join(ROOT, 'dll', 'target', 'release', 'gfx_reloader.dll')
     toast = os.path.join(ROOT, 'tests', 'toast-build', 'release', 'toast_wrapper.dll')
     for path in (dll, toast):
         if not os.path.isfile(path):
@@ -102,7 +102,7 @@ def main():
         shutil.rmtree(KIT)
     os.makedirs(os.path.join(KIT, 'mod', 'menu'))
     os.makedirs(os.path.join(KIT, 'colored'))
-    shutil.copyfile(dll, os.path.join(KIT, 'ui_hot_reload.dll'))
+    shutil.copyfile(dll, os.path.join(KIT, 'gfx_reloader.dll'))
     shutil.copyfile(toast, os.path.join(KIT, 'toast_wrapper.dll'))
     stock = tint.stock_path('01_000_FE', tint.GAMES['ac6'][0])
     shutil.copyfile(stock, os.path.join(KIT, 'mod', 'menu', HUD))

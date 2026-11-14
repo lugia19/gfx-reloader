@@ -1,4 +1,4 @@
-# ui-hot-reload: research notes (2026-11-13)
+# gfx-reloader: research notes (2026-11-13)
 
 Everything found while building the tool, in the order it was found. Short version: [how-it-works.md](how-it-works.md).
 
@@ -177,9 +177,12 @@ which replaced the disk-fallback patch and the leftover purge described above.
   for the whole session (tested that way first: boot, garage, Assembly and AC TEST were normal, Arxan on). The hook
   now does the game's bookkeeping itself. The stock opener (instructions `0x1415f41f4`..`0x1415f4254`): lookup
   `0x14153d3d0`(repository `[0x144e245b0]`, a wide copy of the path it was given), take the file from the entry
-  (`0x14153dc50`), then, if the flag function `0x14171da90` says so, release `0x1416040c0`(system = opener `+0x18`,
-  entry). The same flag gates the disk read on a miss (the `jnz`): it looks like a shipping/development switch
-  (off: entries kept, misses read from disk).
+  (`0x14153dc50`), then, if `0x14171da90` returns true, release `0x1416040c0`(system = opener `+0x18`, entry). The
+  same call gates the disk read on a miss (the `jnz`). `0x14171da90` is a stub that returns 1 (thunk to
+  `0x14120759a`: `return 1`), called from eleven places in the scaleform system (movie lookup, opener, the boot
+  request code): a build-time setting compiled to a constant, probably "use the file repository" (a development
+  build would return false: entries kept, misses read from disk; not confirmed). So in this exe the release always
+  happens, and the hook releasing unconditionally matches the game.
 - The hook's lookup with the me3 token finds the entries. Boot with the full package: 107 disk reads, 104 entries
   gone after one release, 2 still there (`01_070_CommandList` and `01_900_Black`, requested twice: their second
   copies, as in the stock game). One later open (157 s) had no entry left, as expected.
