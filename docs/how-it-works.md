@@ -1,6 +1,6 @@
 # How ui-hot-reload works
 
-Armored Core VI 1.09.1. The full investigation, with every test and dead end, is in
+Described for Armored Core VI 1.09.1; Elden Ring's differences are at the end. The full investigation, with every test and dead end, is in
 [research-notes.md](research-notes.md). Class names come from Elden Ring's RTTI (same engine; AC6's exe has none), each
 matched to AC6 by layout and code: see [er-port.md](er-port.md).
 
@@ -41,6 +41,18 @@ matched to AC6 by layout and code: see [er-port.md](er-port.md).
      scene change; the two background panels `01_MenuCommonBG` and `02_OnlineArena_CommonBG` only on return to the
      title screen).
 4. Menus that aren't on screen need nothing more: their next open reads the new file.
+
+## Elden Ring
+
+Same engine, same steps 2 to 4 (addresses in [er-port.md](er-port.md)). Step 1 differs:
+
+- ER's in-memory store (`CS::GfxRepositoryImp`) **keeps** the boot copy of every menu file, and the file opener
+  (`CS::CSScaleformFileOpener`) has no disk read for menu files at all: a released movie would be rebuilt from the
+  boot copy.
+- me3 replaces the path of every file it overrides with a token (`\\me3??54`); stock files keep their archive path
+  (`data0:/menu/01_900_black.gfx`). The tool hooks the file opener and sends every path that isn't an archive path
+  to Scaleform's default opener, which reads the file itself. So exactly the package's files are read from disk, and nothing else changes.
+- Quirk: reloading the HUD replays the "runes gained" animation for your whole total (display only).
 
 ## Limits found
 

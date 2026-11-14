@@ -1,8 +1,10 @@
 # ui-hot-reload
 
-Edit a menu `.gfx` of your Armored Core VI mod, press a key, and see the change in the running game. No restart.
+Edit a menu `.gfx` of your Armored Core VI or Elden Ring mod, press a key, and see the change in the running game.
+No restart.
 
-For game version 1.09.1, with [me3](https://github.com/garyttierney/me3).
+For Armored Core VI 1.09.1 and Elden Ring (Steam build 25827938), with [me3](https://github.com/garyttierney/me3).
+The same DLL works in both games.
 
 ## Setup
 
@@ -32,6 +34,9 @@ package = C:\path\to\your\package
 
 ## What you'll see
 
+The examples are from Armored Core VI; Elden Ring behaves the same way (title screen and HUD reload instantly, the
+title logo is a panel).
+
 - **Menus on screen** (garage menus, the HUD in a mission, fades, captions): reloaded instantly.
 - **Menus not on screen**: they use the new file the next time they open.
 - **Panels** (the license panel, Assembly's stat panels, some backgrounds): you see the new shapes and colors right
@@ -45,5 +50,7 @@ package = C:\path\to\your\package
 - **New files need a restart.** me3 only serves files that existed when the game started. To work on a menu your
   mod doesn't override yet, put a copy of the stock file in your package first, then start the game.
 - Only `.gfx` menu movies. Textures (`.tpf`) and other files aren't reloaded.
+- Elden Ring: reloading the HUD replays the "runes gained" animation for your whole total. It's only the display;
+  your runes don't change.
 
 How it works: [docs/how-it-works.md](docs/how-it-works.md). Building and testing: [docs/development.md](docs/development.md).

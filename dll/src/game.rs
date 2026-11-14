@@ -21,7 +21,7 @@ pub enum MapKey {
 }
 
 /// AC6 only: the in-memory file repository the file opener reads menu files from (filled at boot, emptied as movies
-/// open), and what the tool needs to read edited files anyway. Elden Ring's file opener has no such gate.
+/// open), and what the tool needs to read edited files anyway.
 pub struct Repository {
     /// The file opener's `jnz` that skips its disk read for files that aren't in the repository; NOPed at load.
     pub disk_fallback_jnz: usize,
@@ -29,16 +29,34 @@ pub struct Repository {
     /// The repository pointer, its lookup (repository, wchar path) -> entry, and the release of one reference
     /// (system, entry), which the file opener calls after opening from it.
     pub repository: usize,
-    pub lookup: usize,
-    pub release: usize,
+    pub lookup: Code,
+    pub release: Code,
     /// (out string object, menu table entry) -> string object with the menu's wchar path pointer at +8.
-    pub menu_path: usize,
+    pub menu_path: Code,
+}
+
+/// Elden Ring only: its scaleform file opener (`CS::CSScaleformFileOpener`, vtable +8) serves menu files from the
+/// boot-loaded `CS::GfxRepositoryImp`, which keeps them, and has no disk read on that path: an edited file is never
+/// read. The tool hooks it and sends every path that isn't an archive path (a mod's file) to the default opener,
+/// which reads the file itself. Both take (this, utf-8 url, flags, mode) -> file.
+pub struct FileOpener {
+    pub open: Code,
+    pub default_open: Code,
+}
+
+/// How an edited menu file gets read from disk once its cached movie is released: each game keeps menu files in a
+/// store in memory, and the stores behave differently.
+pub enum DiskRead {
+    /// AC6: the store empties as movies open; re-enable the file opener's disk fallback, purge leftover entries.
+    RepositoryFallback(Repository),
+    /// Elden Ring: the store keeps every file and the opener has no disk read; hook the opener.
+    OpenerHook(FileOpener),
 }
 
 pub struct Game {
     pub name: &'static str,
     /// The exe's file name, lowercase.
-    exe: &'static str,
+    pub exe: &'static str,
     /// Menu table: entries of 16 bytes {int layer, byte resident (+4), wchar* name (+8)}, filled at startup.
     pub menu_table: usize,
     pub menu_count: usize,
@@ -58,12 +76,27 @@ pub struct Game {
     pub window_step: Code,
     pub window_close: Code,
     pub function_pointer_function: usize,
-    /// Embedded panels (`CS::MenuResource`): open; their close where the game has one (Elden Ring closes the player
-    /// inline); the scaleform system's player close (system, player), which every panel close goes through.
+    /// Embedded panels (`CS::MenuResource`): open; their close where the game has one; the scaleform system's player
+    /// close (system, player), which every panel close goes through. AC6's open and close also keep a per-name count
+    /// in the menu manager (map at +0x98), so its panels must be closed with its close; Elden Ring has no such count
+    /// and closes the player inline.
     pub panel_open: Code,
     pub panel_close: Option<Code>,
     pub player_close: Code,
-    pub repository: Option<Repository>,
+    pub disk_read: DiskRead,
+}
+
+impl Game {
+    /// Every game function the tool hooks or calls through a `Code` (checked by `detect`).
+    fn functions(&self) -> Vec<&Code> {
+        let mut functions = vec![&self.window_step, &self.window_close, &self.panel_open, &self.player_close];
+        functions.extend(self.panel_close.as_ref());
+        match &self.disk_read {
+            DiskRead::RepositoryFallback(repo) => functions.extend([&repo.lookup, &repo.release, &repo.menu_path]),
+            DiskRead::OpenerHook(opener) => functions.extend([&opener.open, &opener.default_open]),
+        }
+        functions
+    }
 }
 
 const GAMES: [Game; 2] = [
@@ -85,13 +118,13 @@ const GAMES: [Game; 2] = [
         panel_open: Code { rva: 0xc8acf0, prologue: [0x48, 0x8b, 0xc4, 0x57, 0x48, 0x81, 0xec, 0xc0] },
         panel_close: Some(Code { rva: 0xc8aff0, prologue: [0x40, 0x57, 0x48, 0x83, 0xec, 0x30, 0x48, 0x8b] }),
         player_close: Code { rva: 0x1606b10, prologue: [0x40, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55] },
-        repository: Some(Repository {
+        disk_read: DiskRead::RepositoryFallback(Repository {
             disk_fallback_jnz: 0x15f427d,
             disk_fallback_original: [0x0f, 0x85, 0xfb, 0x01, 0x00, 0x00],
             repository: 0x4e245b0,
-            lookup: 0x153d3d0,
-            release: 0x16040c0,
-            menu_path: 0x160a5b0,
+            lookup: Code { rva: 0x153d3d0, prologue: [0x48, 0x83, 0xec, 0x38, 0x48, 0x89, 0x54, 0x24] },
+            release: Code { rva: 0x16040c0, prologue: [0x48, 0x89, 0x5c, 0x24, 0x10, 0x56, 0x48, 0x83] },
+            menu_path: Code { rva: 0x160a5b0, prologue: [0x48, 0x8b, 0xc4, 0x55, 0x57, 0x41, 0x56, 0x48] },
         }),
     },
     Game {
@@ -112,7 +145,10 @@ const GAMES: [Game; 2] = [
         panel_open: Code { rva: 0x74aa40, prologue: [0x40, 0x53, 0x48, 0x81, 0xec, 0xa0, 0x00, 0x00] },
         panel_close: None,
         player_close: Code { rva: 0xd7bc40, prologue: [0x40, 0x55, 0x56, 0x57, 0x48, 0x81, 0xec, 0x80] },
-        repository: None,
+        disk_read: DiskRead::OpenerHook(FileOpener {
+            open: Code { rva: 0xd6e970, prologue: [0x40, 0x55, 0x53, 0x56, 0x57, 0x41, 0x54, 0x41] },
+            default_open: Code { rva: 0x1159f50, prologue: [0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c] },
+        }),
     },
 ];
 
@@ -136,7 +172,6 @@ static BASE: OnceLock<usize> = OnceLock::new();
 unsafe extern "system" {
     fn VirtualProtect(addr: *mut c_void, size: usize, new: u32, old: *mut u32) -> i32;
     fn GetModuleHandleW(name: *const u16) -> usize;
-    fn GetModuleFileNameW(module: *mut u8, buffer: *mut u16, size: u32) -> u32;
 }
 
 /// The detected game (after `detect`).
@@ -154,31 +189,27 @@ pub fn code(code: &Code) -> usize {
     at(code.rva)
 }
 
-fn exe_name() -> String {
-    let mut buffer = [0u16; 1024];
-    let len = unsafe { GetModuleFileNameW(std::ptr::null_mut(), buffer.as_mut_ptr(), buffer.len() as u32) } as usize;
-    let path = String::from_utf16_lossy(&buffer[..len]);
-    path.rsplit(['\\', '/']).next().unwrap_or_default().to_lowercase()
-}
-
-/// Finds the running game by its exe and checks every function the tool uses.
+/// Finds the running game by its exe and checks the functions the tool hooks or calls (`Game::functions`).
 pub fn detect() -> Result<&'static Game, String> {
-    let exe = exe_name();
+    let exe = std::env::current_exe()
+        .ok()
+        .and_then(|path| path.file_name().map(|name| name.to_string_lossy().to_lowercase()))
+        .unwrap_or_default();
     let game = GAMES.iter().find(|g| g.exe == exe).ok_or_else(|| format!("unsupported game ({exe})"))?;
     let _ = BASE.set(unsafe { GetModuleHandleW(std::ptr::null()) });
     let _ = GAME.set(game);
-    let mut functions = vec![&game.window_step, &game.window_close, &game.panel_open, &game.player_close];
-    functions.extend(game.panel_close.as_ref());
-    for function in functions {
-        check_code(function)?;
+    for function in game.functions() {
+        // another mod's hook (a `jmp`) at the start is fine
+        if unsafe { read::<u8>(code(function)) } != 0xe9 {
+            check_bytes(code(function), function.prologue)?;
+        }
     }
     Ok(game)
 }
 
-fn check_code(function: &Code) -> Result<(), String> {
-    let addr = code(function);
-    let actual = unsafe { std::slice::from_raw_parts(addr as *const u8, function.prologue.len()) };
-    if actual != function.prologue && actual[0] != 0xe9 {
+fn check_bytes<const N: usize>(addr: usize, expected: [u8; N]) -> Result<(), String> {
+    let actual: [u8; N] = unsafe { read(addr) };
+    if actual != expected {
         return Err(format!("unexpected code at {addr:#x} (not {}?): {actual:02x?}", game().name));
     }
     Ok(())
@@ -287,13 +318,11 @@ pub fn patch_disk_fallback(repository: &Repository) -> Result<(), String> {
     if current == [0x90; 6] {
         return Ok(());
     }
-    if current != repository.disk_fallback_original {
-        return Err(format!("unexpected code at {addr:#x} (not {}?): {current:02x?}", game().name));
-    }
+    check_bytes(addr, repository.disk_fallback_original)?;
     unsafe {
         let mut old = 0u32;
         VirtualProtect(addr as *mut c_void, 6, 0x40, &mut old);
-        std::ptr::write(addr as *mut [u8; 6], [0x90; 6]);
+        write(addr, [0x90u8; 6]);
         VirtualProtect(addr as *mut c_void, 6, old, &mut old);
     }
     Ok(())

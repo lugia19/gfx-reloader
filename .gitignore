@@ -4,3 +4,4 @@ __pycache__/
 tests/mod/menu/
 tests/toast-build/
 dist/
+tests/mod-er/menu/

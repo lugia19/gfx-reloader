@@ -70,14 +70,20 @@ fn package_from_config(dll: &Path) -> Option<PathBuf> {
         return None;
     };
     let text = std::fs::read_to_string(&ini).unwrap_or_default();
-    let package = text
+    let settings: Vec<(&str, &str)> = text
         .lines()
         .map(str::trim)
         .filter(|l| !l.starts_with('#') && !l.starts_with(';'))
         .filter_map(|l| l.split_once('='))
-        .find(|(key, _)| key.trim() == "package")
+        .map(|(key, value)| (key.trim(), value.trim()))
+        .collect();
+    // `package_<exe name>` (e.g. package_eldenring) wins over `package`, so one ini can serve both games
+    let per_game = format!("package_{}", game::game().exe.trim_end_matches(".exe"));
+    let setting = |wanted: &str| settings.iter().find(|(key, _)| *key == wanted).map(|(_, value)| *value);
+    let package = setting(&per_game)
+        .or_else(|| setting("package"))
         // a relative path is relative to the ini's folder
-        .map(|(_, value)| ini.parent().unwrap_or(Path::new(".")).join(value.trim()));
+        .map(|value| ini.parent().unwrap_or(Path::new(".")).join(value));
     if package.is_none() {
         log(&format!("{}: no `package = ...` line; F7/F8 do nothing", ini.display()));
     }
@@ -95,10 +101,13 @@ unsafe fn hook(function: &game::Code, detour: *const (), original: &AtomicUsize)
 
 fn install() -> Result<&'static game::Game, String> {
     let game = game::detect()?;
-    if let Some(repository) = &game.repository {
-        game::patch_disk_fallback(repository)?;
-    }
     unsafe {
+        match &game.disk_read {
+            game::DiskRead::RepositoryFallback(repository) => game::patch_disk_fallback(repository)?,
+            game::DiskRead::OpenerHook(opener) => {
+                hook(&opener.open, reload::open_file_hook as *const (), &reload::ORIG_OPEN_FILE)?
+            }
+        }
         hook(&game.window_step, reload::window_step_hook as *const (), &reload::ORIG_WINDOW_STEP)?;
         hook(&game.panel_open, reload::panel_open_hook as *const (), &reload::ORIG_PANEL_OPEN)?;
         hook(&game.player_close, reload::player_close_hook as *const (), &reload::ORIG_PLAYER_CLOSE)?;

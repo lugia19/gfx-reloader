@@ -3,6 +3,7 @@
     python -I tools/tint.py 02_coloring 00FF00     # green: RGB multiply (0, 1, 0) on every placed object
     python -I tools/tint.py 01_900_Black FFFFFF --add FF0000   # add red: shows on black art too
     python -I tools/tint.py 02_coloring --restore  # stock file back
+    python -I tools/tint.py --game er 01_000_FE 00FF00   # Elden Ring (tests/mod-er)
 
 Every PlaceObject2/3 that places a character (in the root timeline and in every sprite) gets a color transform
 multiplying RGB by the given color; existing color transforms are scaled by it (add terms and alpha kept). Pure
@@ -12,8 +13,12 @@ inherit the tint of the clip they're attached to. Reads the stock file from the 
 import argparse, os, shutil, struct, zlib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-PACKAGE_MENU = os.path.join(HERE, '..', 'tests', 'mod', 'menu')
-GAME_MENU = r'D:\SteamLibrary\steamapps\common\ARMORED CORE VI FIRES OF RUBICON\Game\menu'
+# game -> (unpacked stock menu folder, test package menu folder)
+GAMES = {
+    'ac6': (r'D:\SteamLibrary\steamapps\common\ARMORED CORE VI FIRES OF RUBICON\Game\menu',
+            os.path.join(HERE, '..', 'tests', 'mod', 'menu')),
+    'er': (r'D:\SteamLibrary\steamapps\common\ELDEN RING\Game\menu', os.path.join(HERE, '..', 'tests', 'mod-er', 'menu')),
+}
 
 
 class BitReader:
@@ -132,12 +137,12 @@ def rebuild(data, start, end, rgb, nested, add_rgb=None):
     return bytes(out), tinted
 
 
-def stock_path(name):
-    for folder in (GAME_MENU, os.path.join(GAME_MENU, 'win')):
+def stock_path(name, game_menu):
+    for folder in (game_menu, os.path.join(game_menu, 'win')):
         for candidate in os.listdir(folder):
             if candidate.lower() == name.lower() + '.gfx':
                 return os.path.join(folder, candidate)
-    raise SystemExit(f'{name}.gfx not found in {GAME_MENU}')
+    raise SystemExit(f'{name}.gfx not found in {game_menu}')
 
 
 def main():
@@ -146,11 +151,13 @@ def main():
     parser.add_argument('color', nargs='?', default='00FF00', help='RGB multiply as RRGGBB (default 00FF00)')
     parser.add_argument('--add', metavar='RRGGBB', help='also add this color (makes black art visible)')
     parser.add_argument('--restore', action='store_true', help='copy the stock file back')
+    parser.add_argument('--game', choices=GAMES, default='ac6')
     args = parser.parse_args()
+    game_menu, package_menu = GAMES[args.game]
 
-    source = stock_path(args.name)
+    source = stock_path(args.name, game_menu)
     sub = 'win' if os.path.basename(os.path.dirname(source)).lower() == 'win' else ''
-    target = os.path.normpath(os.path.join(PACKAGE_MENU, sub, os.path.basename(source)))
+    target = os.path.normpath(os.path.join(package_menu, sub, os.path.basename(source)))
     if not os.path.exists(target):
         print(f'warning: {target} did not exist; me3 only serves files that existed at launch')
     if args.restore:

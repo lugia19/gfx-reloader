@@ -3,7 +3,7 @@
 //!
 //! Per requested menu:
 //! 1. its cached movie is released (AC6: and any leftover repository entry for its file is dropped), so the next load
-//!    reads the file from disk;
+//!    reads the file from disk (AC6: through the patched disk fallback; Elden Ring: through `open_file_hook`);
 //! 2. live embedded panels with that movie are closed and reopened (new art, but their owner keeps talking to the old
 //!    movie: preview only);
 //! 3. a live self-owned window with that movie is closed with its own close and reopened by its step in the same
@@ -18,7 +18,10 @@ use std::time::{Duration, Instant};
 use crate::game::*;
 use crate::{TOAST_LINE, log, toast};
 
+/// Window step, window close, panel open, panel close: (object, three more arguments).
 type WindowFn = unsafe extern "system" fn(usize, usize, usize, usize) -> usize;
+/// Scaleform file open: (opener, utf-8 path, flags, mode) -> file.
+type OpenFileFn = unsafe extern "system" fn(usize, *const u8, usize, usize) -> usize;
 type PlayerCloseFn = unsafe extern "system" fn(usize, usize) -> usize;
 type RepositoryLookupFn = unsafe extern "system" fn(usize, *const u16) -> usize;
 type RepositoryReleaseFn = unsafe extern "system" fn(usize, usize) -> usize;
@@ -27,6 +30,14 @@ type MenuPathFn = unsafe extern "system" fn(*mut u8, usize) -> usize;
 pub static ORIG_WINDOW_STEP: AtomicUsize = AtomicUsize::new(0);
 pub static ORIG_PANEL_OPEN: AtomicUsize = AtomicUsize::new(0);
 pub static ORIG_PLAYER_CLOSE: AtomicUsize = AtomicUsize::new(0);
+pub static ORIG_OPEN_FILE: AtomicUsize = AtomicUsize::new(0);
+
+/// Whether a file opener path points into the game's archives: a named root, then `:/` (`data0:/menu/x.gfx`). A mod
+/// loader replaces the path of a file it overrides (me3: a token like `\\me3??54`), so anything else is a mod's
+/// file, the only kind that can have been edited. A one-letter root is a drive (`C:/...`), not an archive.
+fn is_archive_path(path: &str) -> bool {
+    path.split_once(":/").is_some_and(|(root, _)| root.len() >= 2 && root.chars().all(|c| c.is_ascii_alphanumeric()))
+}
 
 /// Set while there are requests or menus waiting for their window, so the per-frame hook does nothing otherwise.
 static PENDING: AtomicBool = AtomicBool::new(false);
@@ -121,8 +132,10 @@ unsafe fn list_on_screen(system: usize) {
     }
 }
 
-fn original(slot: &AtomicUsize) -> WindowFn {
-    unsafe { std::mem::transmute(slot.load(Ordering::Relaxed)) }
+/// The original of a hooked function (its trampoline, stored by `hook`), as the function type `F`.
+fn original<F: Copy>(slot: &AtomicUsize) -> F {
+    assert_eq!(size_of::<F>(), size_of::<usize>());
+    unsafe { std::mem::transmute_copy(&slot.load(Ordering::Relaxed)) }
 }
 
 // ---- hooks ----------------------------------------------------------------------------------------------------------
@@ -134,11 +147,11 @@ pub unsafe extern "system" fn window_step_hook(window: usize, out: usize, p3: us
             return unsafe { reload_window(window, &name, out, p3, p4) };
         }
     }
-    unsafe { original(&ORIG_WINDOW_STEP)(window, out, p3, p4) }
+    unsafe { original::<WindowFn>(&ORIG_WINDOW_STEP)(window, out, p3, p4) }
 }
 
 pub unsafe extern "system" fn panel_open_hook(panel: usize, a: usize, b: usize, c: usize) -> usize {
-    let result = unsafe { original(&ORIG_PANEL_OPEN)(panel, a, b, c) };
+    let result = unsafe { original::<WindowFn>(&ORIG_PANEL_OPEN)(panel, a, b, c) };
     let player: usize = unsafe { read(panel + PANEL_PLAYER) };
     let mut panels = PANELS.lock().unwrap();
     panels.retain(|p| p.panel != panel);
@@ -151,8 +164,25 @@ pub unsafe extern "system" fn panel_open_hook(panel: usize, a: usize, b: usize, 
 /// The scaleform system's player close (system, player): a panel whose player closes is no longer live.
 pub unsafe extern "system" fn player_close_hook(system: usize, player: usize) -> usize {
     PANELS.lock().unwrap().retain(|p| p.player != player);
-    let close: PlayerCloseFn = unsafe { std::mem::transmute(ORIG_PLAYER_CLOSE.load(Ordering::Relaxed)) };
-    unsafe { close(system, player) }
+    unsafe { original::<PlayerCloseFn>(&ORIG_PLAYER_CLOSE)(system, player) }
+}
+
+/// The game's scaleform file open, where the game serves menu files from a store that keeps them (`FileOpener`): a
+/// mod's files (not an archive path) are read with the default opener instead, so a released movie loads the
+/// current file. Everything else is left to the game.
+pub unsafe extern "system" fn open_file_hook(this: usize, url: *const u8, flags: usize, mode: usize) -> usize {
+    if let DiskRead::OpenerHook(opener) = &game().disk_read {
+        let path = (!url.is_null()).then(|| unsafe { std::ffi::CStr::from_ptr(url.cast()) }.to_string_lossy());
+        if let Some(path) = path.filter(|p| !is_archive_path(p)) {
+            let default_open: OpenFileFn = unsafe { std::mem::transmute(code(&opener.default_open)) };
+            let file = unsafe { default_open(this, url, flags, mode) };
+            if file != 0 {
+                return file;
+            }
+            log(&format!("warning: {path:?} couldn't be read from disk; using the boot copy"));
+        }
+    }
+    unsafe { original::<OpenFileFn>(&ORIG_OPEN_FILE)(this, url, flags, mode) }
 }
 
 // ---- game-thread work -----------------------------------------------------------------------------------------------
@@ -222,7 +252,9 @@ unsafe fn handle_requests() -> Vec<Waiting> {
         .into_iter()
         .map(|name| {
             unsafe { release_cached(system, &name) };
-            unsafe { drop_repository_leftovers(system, &name) };
+            if let DiskRead::RepositoryFallback(repository) = &game().disk_read {
+                unsafe { drop_repository_leftovers(repository, system, &name) };
+            }
             let previewed = unsafe { reload_panels(system, &name) };
             Waiting { name, previewed }
         })
@@ -246,31 +278,30 @@ unsafe fn release_cached(system: usize, name: &str) {
     }
 }
 
-/// AC6: boot requests some files twice (01_070_CommandList, 01_900_Black) and opens them once; the second copy stays
+/// AC6's boot requests some files twice (01_070_CommandList, 01_900_Black) and opens them once; the second copy stays
 /// in the repository with an already-used file object. Loading that instead of the disk file kills the game.
-unsafe fn drop_repository_leftovers(system: usize, name: &str) {
-    let Some(repo) = &game().repository else { return };
+unsafe fn drop_repository_leftovers(repo: &Repository, system: usize, name: &str) {
     let repository: usize = unsafe { read(at(repo.repository)) };
-    let Some(entry) = menu_entry_named(name) else { return };
+    let Some(menu_entry) = menu_entry_named(name) else { return };
     if repository == 0 {
         return;
     }
     // the game's string object: a generous zeroed buffer, leaked (a few bytes per reload)
     let buffer = Box::leak(vec![0u8; 0x200].into_boxed_slice());
-    let make_path: MenuPathFn = unsafe { std::mem::transmute(at(repo.menu_path)) };
-    unsafe { make_path(buffer.as_mut_ptr(), entry) };
+    let make_path: MenuPathFn = unsafe { std::mem::transmute(code(&repo.menu_path)) };
+    unsafe { make_path(buffer.as_mut_ptr(), menu_entry) };
     let path = usize::from_le_bytes(buffer[8..16].try_into().unwrap()) as *const u16;
     if path.is_null() {
         return;
     }
-    let lookup: RepositoryLookupFn = unsafe { std::mem::transmute(at(repo.lookup)) };
-    let release: RepositoryReleaseFn = unsafe { std::mem::transmute(at(repo.release)) };
+    let lookup: RepositoryLookupFn = unsafe { std::mem::transmute(code(&repo.lookup)) };
+    let release: RepositoryReleaseFn = unsafe { std::mem::transmute(code(&repo.release)) };
     for _ in 0..8 {
-        let entry = unsafe { lookup(repository, path) };
-        if entry == 0 {
+        let leftover = unsafe { lookup(repository, path) };
+        if leftover == 0 {
             return;
         }
-        unsafe { release(system, entry) };
+        unsafe { release(system, leftover) };
     }
     warn(&format!("{name}: couldn't clear its leftover boot copy; may show the old file"));
 }
@@ -288,29 +319,34 @@ unsafe fn reload_panels(system: usize, name: &str) -> bool {
     if panels.is_empty() {
         return false;
     }
-    let game = game();
     // Through the game's own (hooked) functions, so the registry follows: the close drops the entry, the open adds it.
-    let open: WindowFn = unsafe { std::mem::transmute(code(&game.panel_open)) };
+    let open: WindowFn = unsafe { std::mem::transmute(code(&game().panel_open)) };
     for (panel, player) in panels {
-        match &game.panel_close {
-            Some(close) => {
-                let close: WindowFn = unsafe { std::mem::transmute(code(close)) };
-                unsafe { close(panel, 0, 0, 0) };
-            }
-            // Elden Ring closes a panel inline, as its movie swap does: close the player, clear the field.
-            None => {
-                let close: PlayerCloseFn = unsafe { std::mem::transmute(code(&game.player_close)) };
-                unsafe { close(system, player) };
-                unsafe { write::<usize>(panel + PANEL_PLAYER, 0) };
-            }
-        }
+        unsafe { close_panel(system, panel, player) };
         unsafe { open(panel, 0, 0, 0) };
     }
     log(&format!(
         "{name}: panel reloaded as a PREVIEW: new shapes and colors, but its text, data and input stay with the old \
-         movie until the game rebuilds it (usually the next scene change: entering or leaving a mission or AC TEST)"
+         movie until the game rebuilds it (usually the next scene change)"
     ));
     true
+}
+
+/// Closes a panel's player: with the game's panel close (which may do its own bookkeeping, see `Game::panel_close`),
+/// or, where the game has no such function (it closes panels inline), the same way by hand: close the player, clear
+/// the panel's field.
+unsafe fn close_panel(system: usize, panel: usize, player: usize) {
+    match &game().panel_close {
+        Some(close) => {
+            let close: WindowFn = unsafe { std::mem::transmute(code(close)) };
+            unsafe { close(panel, 0, 0, 0) };
+        }
+        None => {
+            let close: PlayerCloseFn = unsafe { std::mem::transmute(code(&game().player_close)) };
+            unsafe { close(system, player) };
+            unsafe { write::<usize>(panel + PANEL_PLAYER, 0) };
+        }
+    }
 }
 
 /// Closes the window with its own close, then lets the original step reopen it (no controller + factory = open), which
@@ -329,7 +365,7 @@ unsafe fn reload_window(window: usize, name: &str, out: usize, p3: usize, p4: us
     let close: WindowFn = unsafe { std::mem::transmute(code(&game().window_close)) };
     unsafe { close(window, 0, 0, 0) };
     unsafe { write::<usize>(window + WINDOW_CLOSE_CHECK, close_check) };
-    let result = unsafe { original(&ORIG_WINDOW_STEP)(window, out, p3, p4) };
+    let result = unsafe { original::<WindowFn>(&ORIG_WINDOW_STEP)(window, out, p3, p4) };
     if unsafe { read::<usize>(window + WINDOW_CONTROLLER) } != 0 {
         log(&format!("{name}: reloaded live"));
     } else {

@@ -44,26 +44,47 @@ addresses here.
 - **Panel registry:** ER has no separate panel close (the destructor and the movie swap close the player inline).
   So instead of hooking the panel close, the tool hooks the **player close** (AC6 `0x141606b10`, ER `0x140d7bc40`,
   both `(system, player)`), stores `(panel, player, name)` when a panel opens, and drops an entry when its player
-  closes. Same in both games; AC6 needs a re-test after the change.
+  closes. Same in both games.
+- **Closing a panel for a reload** stays per game. AC6's panel open (tail at `0x140c8adc9`) and panel close
+  `0x140c8aff0` keep a per-name count in a map at `CSMenuMan+0x98` (the close decrements it and erases the entry at
+  zero, then closes the player and clears `+0x60`), so the tool calls AC6's close. ER's panel open, movie swap and
+  destructor never touch the menu manager, and its closes are just "close the player, clear `+0x60`", which the tool
+  does by hand there.
 - **Map node keys** are read per game: AC6 pointer + length; ER `std::wstring` (inline under 8 characters).
-- **Per-game table** like Toast-Wrapper's: exe name, offsets from the exe base, struct offsets, optional AC6-only
-  parts (disk-fallback patch, repository purge with its path builder) set to "none" for ER if the OpenFile finding
-  holds.
+- **Per-game table** like Toast-Wrapper's: exe name, offsets from the exe base, struct offsets, and per-game
+  optional parts: AC6's disk-fallback patch and repository purge, ER's OpenFile hook (below).
+
+## Reading edited files in ER (confirmed in game)
+
+ER has an in-memory store like AC6's, but it behaves differently, so AC6's fix doesn't carry over.
+
+- OpenFile (`0x140d6e970`) checks the path with `[0x14458fb68]` (call `0x141ee7540` at `0x140d6ea36`). Not found ->
+  Scaleform's default file opener `0x141159f50` (reads the file itself). Found (every menu file) -> the store
+  `CS::GfxRepositoryImp` (`[0x143d83888]`): lookup `0x140cea560` (map at `repo+0x78`), then `0x140ceb070` builds a
+  memory file from `entry+0x78`/`+0x80`. A miss there returns 0: **no disk read on that path**.
+- The store **keeps its entries** (AC6's are dropped as movies open), so a released movie was rebuilt from the boot
+  copy: first test, a reloaded title screen stayed stock although me3 served the new file.
+- me3 replaces the path of each file it overrides with a token (`\\me3??54`); files from the archives keep theirs
+  (`data0:/menu/01_900_black.gfx`). Seen in the OpenFile hook's log: with two files in the package, 2 of 113 boot
+  opens had tokens. The store is keyed by the string OpenFile gets, so a menu name alone doesn't find its entry.
+- **Fix:** hook OpenFile; an archive path (a root name of 2+ characters, then `:/`) is left alone, anything else
+  goes to the default opener (falls back to the original if that returns 0). So exactly the package's files are
+  read from disk, every time, boot included (110 files with a full package, no failures). The default opener takes
+  me3's tokens fine. The check is "not an archive path" rather than "starts with `\\me3`" so a changed token
+  format or another loader doesn't silently bring the stale copies back; only `data0` has been seen as a root. If
+  an exe patched to read unpacked files passes other paths for stock files, the cost is extra disk reads.
+- Tested: title screen reloaded live (window + logo panel), title reloaded while in game then shown on quit to
+  menu, HUD (`01_000_FE`) reloaded live while playing.
+- Quirk: a reloaded HUD starts its rune counter at 0 and the game sets the real total, so the "runes gained"
+  animation plays for the whole total. Display only (a second reload shows the same total).
 
 ## Probable (one signal so far)
 
-- **No in-memory repository in ER's OpenFile.** It checks the path with `[0x14458fb68]` (call `0x141ee7540` at
-  `0x140d6ea36`): not found -> Scaleform's default file opener `0x141159f50` (plain disk read); found -> the game's
-  file system `[0x143d83888]` -> `0x140cea560`. No AC6-style "repository only" gate, and `Scaleform.SwfCache` is
-  only a memory container's name (set up in the lookup). If that holds, ER needs no disk-fallback patch and no
-  leftover purge, just the cache release and the window reopen. To confirm in game (reload without the patch).
 - The scaleform system class: `CS::CSScaleformImp` (`FD4Singleton<CS::CSScaleform>`, vtable `0x142bbe6c8`,
   constructor `0x140d6d990`); the holder `[0x143d8a1d8]` may be that singleton.
 
-## To do
+## Status
 
-- Read-only memory check in the running game: `[[holder]+8]` -> cache map holds menu names (wstring keys); active
-  list shows the open menus; menu table names read back.
-- The per-game table in the DLL (see above).
-- In-game test: reload a menu on screen without any OpenFile patch (confirms the OpenFile finding), one not on
-  screen, the HUD while playing, a panel (`CS::MenuResource`); re-test AC6 after the panel registry change.
+- Done and merged into `main`: read-only memory check (menu table names, cache map with 110 wstring keys, active
+  list); the per-game table; the ER in-game tests above; AC6 re-tested after the panel registry change (garage menu
+  live, Assembly stat panels as previews and rebuilt after AC TEST, HUD live in AC TEST).

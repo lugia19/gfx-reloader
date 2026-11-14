@@ -81,7 +81,7 @@ If something goes wrong, send the log: <game folder>\\Game\\debug-logs\\ui_hot_r
 
 def make_hud(color, add, out):
     """A tinted copy of the stock HUD (tint.py's color transform on every placed object)."""
-    data = open(tint.stock_path('01_000_FE'), 'rb').read()
+    data = open(tint.stock_path('01_000_FE', tint.GAMES['ac6'][0]), 'rb').read()
     nbits = data[8] >> 3
     tags_start = 8 + (5 + 4 * nbits + 7) // 8 + 4
     rgb = [int(color[i:i + 2], 16) * 256 // 255 for i in (0, 2, 4)]
@@ -104,7 +104,7 @@ def main():
     os.makedirs(os.path.join(KIT, 'colored'))
     shutil.copyfile(dll, os.path.join(KIT, 'ui_hot_reload.dll'))
     shutil.copyfile(toast, os.path.join(KIT, 'toast_wrapper.dll'))
-    stock = tint.stock_path('01_000_FE')
+    stock = tint.stock_path('01_000_FE', tint.GAMES['ac6'][0])
     shutil.copyfile(stock, os.path.join(KIT, 'mod', 'menu', HUD))
     shutil.copyfile(stock, os.path.join(KIT, 'colored', '01_000_fe_stock.gfx'))
     for name, (color, add) in COLORS.items():
