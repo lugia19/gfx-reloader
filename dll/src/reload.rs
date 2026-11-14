@@ -2,8 +2,8 @@
 //! thread, inside the self-owned windows' step (called every frame for every live window).
 //!
 //! Per requested menu:
-//! 1. its cached movie is released (AC6: and any leftover repository entry for its file is dropped), so the next load
-//!    reads the file from disk (AC6: through the patched disk fallback; Elden Ring: through `open_file_hook`);
+//! 1. its cached movie is released, so the next load opens the file again, and `open_file_hook` makes that open read
+//!    the file from disk;
 //! 2. live embedded panels with that movie are closed and reopened (new art, but their owner keeps talking to the old
 //!    movie: preview only);
 //! 3. a live self-owned window with that movie is closed with its own close and reopened by its step in the same
@@ -22,10 +22,9 @@ use crate::{TOAST_LINE, TOAST_LONG_SECONDS, log, toast, toast_for};
 type WindowFn = unsafe extern "system" fn(usize, usize, usize, usize) -> usize;
 /// Scaleform file open: (opener, utf-8 path, flags, mode) -> file.
 type OpenFileFn = unsafe extern "system" fn(usize, *const u8, usize, usize) -> usize;
+type StoreLookupFn = unsafe extern "system" fn(usize, *const u16) -> usize;
+type StoreReleaseFn = unsafe extern "system" fn(usize, usize) -> usize;
 type PlayerCloseFn = unsafe extern "system" fn(usize, usize) -> usize;
-type RepositoryLookupFn = unsafe extern "system" fn(usize, *const u16) -> usize;
-type RepositoryReleaseFn = unsafe extern "system" fn(usize, usize) -> usize;
-type MenuPathFn = unsafe extern "system" fn(*mut u8, usize) -> usize;
 
 pub static ORIG_WINDOW_STEP: AtomicUsize = AtomicUsize::new(0);
 pub static ORIG_PANEL_OPEN: AtomicUsize = AtomicUsize::new(0);
@@ -167,22 +166,40 @@ pub unsafe extern "system" fn player_close_hook(system: usize, player: usize) ->
     unsafe { original::<PlayerCloseFn>(&ORIG_PLAYER_CLOSE)(system, player) }
 }
 
-/// The game's scaleform file open, where the game serves menu files from a store that keeps them (`FileOpener`): a
-/// mod's files (not an archive path) are read with the default opener instead, so a released movie loads the
-/// current file. Everything else is left to the game.
+
+/// The game's scaleform file open (`FileOpener`): a mod's files (not an archive path) are read with the default opener
+/// instead of the game's store, so a released movie loads the current file. Everything else is left to the game.
 pub unsafe extern "system" fn open_file_hook(this: usize, url: *const u8, flags: usize, mode: usize) -> usize {
-    if let DiskRead::OpenerHook(opener) = &game().disk_read {
-        let path = (!url.is_null()).then(|| unsafe { std::ffi::CStr::from_ptr(url.cast()) }.to_string_lossy());
-        if let Some(path) = path.filter(|p| !is_archive_path(p)) {
-            let default_open: OpenFileFn = unsafe { std::mem::transmute(code(&opener.default_open)) };
-            let file = unsafe { default_open(this, url, flags, mode) };
-            if file != 0 {
-                return file;
-            }
-            log(&format!("warning: {path:?} couldn't be read from disk; using the boot copy"));
+    let path = (!url.is_null()).then(|| unsafe { std::ffi::CStr::from_ptr(url.cast()) }.to_string_lossy());
+    if let Some(path) = path.filter(|p| !is_archive_path(p)) {
+        let default_open: OpenFileFn = unsafe { std::mem::transmute(code(&game().file_opener.default_open)) };
+        let file = unsafe { default_open(this, url, flags, mode) };
+        if file != 0 {
+            unsafe { release_store_entry(this, &path) };
+            return file;
         }
+        log(&format!("warning: {path:?} couldn't be read from disk; using the boot copy"));
     }
     unsafe { original::<OpenFileFn>(&ORIG_OPEN_FILE)(this, url, flags, mode) }
+}
+
+/// What the game's opener does after opening a file from its store: release the file's store entry. Done here for
+/// a file read from disk instead, so the store ends up as the game expects (every entry gone once its file has been
+/// opened). Nothing to do where the store keeps its entries.
+unsafe fn release_store_entry(opener: usize, path: &str) {
+    let Some(store) = &game().file_opener.store else { return };
+    let repository: usize = unsafe { read(at(store.repository)) };
+    let system: usize = unsafe { read(opener + OPENER_SYSTEM) };
+    if repository == 0 || system == 0 {
+        return;
+    }
+    let wide: Vec<u16> = path.encode_utf16().chain([0]).collect();
+    let lookup: StoreLookupFn = unsafe { std::mem::transmute(code(&store.lookup)) };
+    let entry = unsafe { lookup(repository, wide.as_ptr()) };
+    if entry != 0 {
+        let release: StoreReleaseFn = unsafe { std::mem::transmute(code(&store.release)) };
+        unsafe { release(system, entry) };
+    }
 }
 
 // ---- game-thread work -----------------------------------------------------------------------------------------------
@@ -252,9 +269,6 @@ unsafe fn handle_requests() -> Vec<Waiting> {
         .into_iter()
         .map(|name| {
             unsafe { release_cached(system, &name) };
-            if let DiskRead::RepositoryFallback(repository) = &game().disk_read {
-                unsafe { drop_repository_leftovers(repository, system, &name) };
-            }
             let previewed = unsafe { reload_panels(system, &name) };
             Waiting { name, previewed }
         })
@@ -276,34 +290,6 @@ unsafe fn release_cached(system: usize, name: &str) {
         let destroy: unsafe extern "system" fn(usize) = unsafe { std::mem::transmute(read::<usize>(read::<usize>(wrapper))) };
         unsafe { destroy(wrapper) };
     }
-}
-
-/// AC6's boot requests some files twice (01_070_CommandList, 01_900_Black) and opens them once; the second copy stays
-/// in the repository with an already-used file object. Loading that instead of the disk file kills the game.
-unsafe fn drop_repository_leftovers(repo: &Repository, system: usize, name: &str) {
-    let repository: usize = unsafe { read(at(repo.repository)) };
-    let Some(menu_entry) = menu_entry_named(name) else { return };
-    if repository == 0 {
-        return;
-    }
-    // the game's string object: a generous zeroed buffer, leaked (a few bytes per reload)
-    let buffer = Box::leak(vec![0u8; 0x200].into_boxed_slice());
-    let make_path: MenuPathFn = unsafe { std::mem::transmute(code(&repo.menu_path)) };
-    unsafe { make_path(buffer.as_mut_ptr(), menu_entry) };
-    let path = usize::from_le_bytes(buffer[8..16].try_into().unwrap()) as *const u16;
-    if path.is_null() {
-        return;
-    }
-    let lookup: RepositoryLookupFn = unsafe { std::mem::transmute(code(&repo.lookup)) };
-    let release: RepositoryReleaseFn = unsafe { std::mem::transmute(code(&repo.release)) };
-    for _ in 0..8 {
-        let leftover = unsafe { lookup(repository, path) };
-        if leftover == 0 {
-            return;
-        }
-        unsafe { release(system, leftover) };
-    }
-    warn(&format!("{name}: couldn't clear its leftover boot copy; may show the old file"));
 }
 
 /// Closes and reopens the live panels showing this movie. Their owners took handles into the old movie when they

@@ -2,7 +2,6 @@
 //! ASLR) and how its structures are laid out, plus small memory helpers. How the pieces fit together:
 //! ../../docs/how-it-works.md; how the Elden Ring side was matched: ../../docs/er-port.md.
 
-use std::ffi::c_void;
 use std::sync::OnceLock;
 
 /// A game function: offset from the exe base, and its first bytes (checked before use; another mod's `jmp` hook is
@@ -20,38 +19,28 @@ pub enum MapKey {
     WString { text: usize, length: usize, capacity: usize },
 }
 
-/// AC6 only: the in-memory file repository the file opener reads menu files from (filled at boot, emptied as movies
-/// open), and what the tool needs to read edited files anyway.
-pub struct Repository {
-    /// The file opener's `jnz` that skips its disk read for files that aren't in the repository; NOPed at load.
-    pub disk_fallback_jnz: usize,
-    pub disk_fallback_original: [u8; 6],
-    /// The repository pointer, its lookup (repository, wchar path) -> entry, and the release of one reference
-    /// (system, entry), which the file opener calls after opening from it.
-    pub repository: usize,
-    pub lookup: Code,
-    pub release: Code,
-    /// (out string object, menu table entry) -> string object with the menu's wchar path pointer at +8.
-    pub menu_path: Code,
-}
-
-/// Elden Ring only: its scaleform file opener (`CS::CSScaleformFileOpener`, vtable +8) serves menu files from the
-/// boot-loaded `CS::GfxRepositoryImp`, which keeps them, and has no disk read on that path: an edited file is never
-/// read. The tool hooks it and sends every path that isn't an archive path (a mod's file) to the default opener,
-/// which reads the file itself. Both take (this, utf-8 url, flags, mode) -> file.
+/// The game's scaleform file opener (`CS::CSScaleformFileOpener`, vtable +8) serves menu files from a store filled at
+/// boot and never reads an edited file: Elden Ring's store (`CS::GfxRepositoryImp`) keeps every file and there is no
+/// disk read on that path; AC6's empties as movies open and its disk read is switched off. The tool hooks the opener
+/// and sends every path that isn't an archive path (a mod's file) to Scaleform's default opener, which reads the file
+/// itself. Both take (this, utf-8 url, flags, mode) -> file.
 pub struct FileOpener {
     pub open: Code,
     pub default_open: Code,
+    /// Where the game's opener releases a file's store entry after opening it (AC6), so the hook can do the same for
+    /// the files it reads from disk. None where the store keeps its entries anyway (Elden Ring).
+    pub store: Option<Store>,
 }
 
-/// How an edited menu file gets read from disk once its cached movie is released: each game keeps menu files in a
-/// store in memory, and the stores behave differently.
-pub enum DiskRead {
-    /// AC6: the store empties as movies open; re-enable the file opener's disk fallback, purge leftover entries.
-    RepositoryFallback(Repository),
-    /// Elden Ring: the store keeps every file and the opener has no disk read; hook the opener.
-    OpenerHook(FileOpener),
+/// AC6's in-memory file repository: its pointer, the lookup (repository, wchar path) -> entry, and the release of
+/// one reference (system, entry). The opener keeps the scaleform system at +0x18.
+pub struct Store {
+    pub repository: usize,
+    pub lookup: Code,
+    pub release: Code,
 }
+
+pub const OPENER_SYSTEM: usize = 0x18;
 
 pub struct Game {
     pub name: &'static str,
@@ -83,18 +72,19 @@ pub struct Game {
     pub panel_open: Code,
     pub panel_close: Option<Code>,
     pub player_close: Code,
-    pub disk_read: DiskRead,
+    pub file_opener: FileOpener,
 }
 
 impl Game {
     /// Every game function the tool hooks or calls through a `Code` (checked by `detect`).
     fn functions(&self) -> Vec<&Code> {
+        let opener = &self.file_opener;
         let mut functions = vec![&self.window_step, &self.window_close, &self.panel_open, &self.player_close];
-        functions.extend(self.panel_close.as_ref());
-        match &self.disk_read {
-            DiskRead::RepositoryFallback(repo) => functions.extend([&repo.lookup, &repo.release, &repo.menu_path]),
-            DiskRead::OpenerHook(opener) => functions.extend([&opener.open, &opener.default_open]),
+        functions.extend([&opener.open, &opener.default_open]);
+        if let Some(store) = &opener.store {
+            functions.extend([&store.lookup, &store.release]);
         }
+        functions.extend(self.panel_close.as_ref());
         functions
     }
 }
@@ -118,14 +108,15 @@ const GAMES: [Game; 2] = [
         panel_open: Code { rva: 0xc8acf0, prologue: [0x48, 0x8b, 0xc4, 0x57, 0x48, 0x81, 0xec, 0xc0] },
         panel_close: Some(Code { rva: 0xc8aff0, prologue: [0x40, 0x57, 0x48, 0x83, 0xec, 0x30, 0x48, 0x8b] }),
         player_close: Code { rva: 0x1606b10, prologue: [0x40, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55] },
-        disk_read: DiskRead::RepositoryFallback(Repository {
-            disk_fallback_jnz: 0x15f427d,
-            disk_fallback_original: [0x0f, 0x85, 0xfb, 0x01, 0x00, 0x00],
-            repository: 0x4e245b0,
-            lookup: Code { rva: 0x153d3d0, prologue: [0x48, 0x83, 0xec, 0x38, 0x48, 0x89, 0x54, 0x24] },
-            release: Code { rva: 0x16040c0, prologue: [0x48, 0x89, 0x5c, 0x24, 0x10, 0x56, 0x48, 0x83] },
-            menu_path: Code { rva: 0x160a5b0, prologue: [0x48, 0x8b, 0xc4, 0x55, 0x57, 0x41, 0x56, 0x48] },
-        }),
+        file_opener: FileOpener {
+            open: Code { rva: 0x15f40b0, prologue: [0x40, 0x55, 0x56, 0x57, 0x41, 0x56, 0x41, 0x57] },
+            default_open: Code { rva: 0x1a7bfb0, prologue: [0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c] },
+            store: Some(Store {
+                repository: 0x4e245b0,
+                lookup: Code { rva: 0x153d3d0, prologue: [0x48, 0x83, 0xec, 0x38, 0x48, 0x89, 0x54, 0x24] },
+                release: Code { rva: 0x16040c0, prologue: [0x48, 0x89, 0x5c, 0x24, 0x10, 0x56, 0x48, 0x83] },
+            }),
+        },
     },
     Game {
         name: "Elden Ring (Steam build 25827938)",
@@ -145,10 +136,11 @@ const GAMES: [Game; 2] = [
         panel_open: Code { rva: 0x74aa40, prologue: [0x40, 0x53, 0x48, 0x81, 0xec, 0xa0, 0x00, 0x00] },
         panel_close: None,
         player_close: Code { rva: 0xd7bc40, prologue: [0x40, 0x55, 0x56, 0x57, 0x48, 0x81, 0xec, 0x80] },
-        disk_read: DiskRead::OpenerHook(FileOpener {
+        file_opener: FileOpener {
             open: Code { rva: 0xd6e970, prologue: [0x40, 0x55, 0x53, 0x56, 0x57, 0x41, 0x54, 0x41] },
             default_open: Code { rva: 0x1159f50, prologue: [0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c] },
-        }),
+            store: None,
+        },
     },
 ];
 
@@ -170,7 +162,6 @@ static GAME: OnceLock<&'static Game> = OnceLock::new();
 static BASE: OnceLock<usize> = OnceLock::new();
 
 unsafe extern "system" {
-    fn VirtualProtect(addr: *mut c_void, size: usize, new: u32, old: *mut u32) -> i32;
     fn GetModuleHandleW(name: *const u16) -> usize;
 }
 
@@ -249,11 +240,6 @@ pub fn menu_names() -> Vec<String> {
     (0..game().menu_count).map(|i| unsafe { name_at(menu_entry(i) + 8) }).collect()
 }
 
-/// Address of a menu's table entry.
-pub fn menu_entry_named(name: &str) -> Option<usize> {
-    (0..game().menu_count).map(menu_entry).find(|entry| unsafe { name_at(entry + 8) } == name)
-}
-
 pub fn scaleform_system() -> usize {
     let holder: usize = unsafe { read(at(game().scaleform_holder)) };
     if holder == 0 { 0 } else { unsafe { read(holder + 8) } }
@@ -309,21 +295,4 @@ pub unsafe fn cache_node(system: usize, name: &str) -> Option<usize> {
         stack.push(unsafe { read(node + 0x10) });
     }
     None
-}
-
-/// AC6: lets the file opener read menu files from disk when they aren't in the repository (after boot, none are).
-pub fn patch_disk_fallback(repository: &Repository) -> Result<(), String> {
-    let addr = at(repository.disk_fallback_jnz);
-    let current: [u8; 6] = unsafe { read(addr) };
-    if current == [0x90; 6] {
-        return Ok(());
-    }
-    check_bytes(addr, repository.disk_fallback_original)?;
-    unsafe {
-        let mut old = 0u32;
-        VirtualProtect(addr as *mut c_void, 6, 0x40, &mut old);
-        write(addr, [0x90u8; 6]);
-        VirtualProtect(addr as *mut c_void, 6, old, &mut old);
-    }
-    Ok(())
 }

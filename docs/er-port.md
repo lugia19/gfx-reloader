@@ -51,8 +51,9 @@ addresses here.
   destructor never touch the menu manager, and its closes are just "close the player, clear `+0x60`", which the tool
   does by hand there.
 - **Map node keys** are read per game: AC6 pointer + length; ER `std::wstring` (inline under 8 characters).
-- **Per-game table** like Toast-Wrapper's: exe name, offsets from the exe base, struct offsets, and per-game
-  optional parts: AC6's disk-fallback patch and repository purge, ER's OpenFile hook (below).
+- **Per-game table** like Toast-Wrapper's: exe name, offsets from the exe base, struct offsets, the file opener
+  and default opener to hook and call (below; AC6 uses the same hook since 2026-11-14), AC6's store lookup and
+  release, and the panel close where the game has one.
 
 ## Reading edited files in ER (confirmed in game)
 
@@ -88,3 +89,5 @@ ER has an in-memory store like AC6's, but it behaves differently, so AC6's fix d
 - Done and merged into `main`: read-only memory check (menu table names, cache map with 110 wstring keys, active
   list); the per-game table; the ER in-game tests above; AC6 re-tested after the panel registry change (garage menu
   live, Assembly stat panels as previews and rebuilt after AC TEST, HUD live in AC TEST).
+- 2026-11-14: AC6 moved to the same OpenFile hook (research-notes.md, "One file opener hook for both games"), so
+  the two games no longer differ in how edited files are read.

@@ -114,12 +114,7 @@ unsafe fn hook(function: &game::Code, detour: *const (), original: &AtomicUsize)
 fn install() -> Result<&'static game::Game, String> {
     let game = game::detect()?;
     unsafe {
-        match &game.disk_read {
-            game::DiskRead::RepositoryFallback(repository) => game::patch_disk_fallback(repository)?,
-            game::DiskRead::OpenerHook(opener) => {
-                hook(&opener.open, reload::open_file_hook as *const (), &reload::ORIG_OPEN_FILE)?
-            }
-        }
+        hook(&game.file_opener.open, reload::open_file_hook as *const (), &reload::ORIG_OPEN_FILE)?;
         hook(&game.window_step, reload::window_step_hook as *const (), &reload::ORIG_WINDOW_STEP)?;
         hook(&game.panel_open, reload::panel_open_hook as *const (), &reload::ORIG_PANEL_OPEN)?;
         hook(&game.player_close, reload::player_close_hook as *const (), &reload::ORIG_PLAYER_CLOSE)?;

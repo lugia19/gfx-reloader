@@ -1,16 +1,19 @@
 # How ui-hot-reload works
 
-Described for Armored Core VI 1.09.1; Elden Ring's differences are at the end. The full investigation, with every test and dead end, is in
-[research-notes.md](research-notes.md). Class names come from Elden Ring's RTTI (same engine; AC6's exe has none), each
-matched to AC6 by layout and code: see [er-port.md](er-port.md).
+Described for Armored Core VI 1.09.1; Elden Ring's differences are at the end. The full investigation, with every
+test and dead end, is in [research-notes.md](research-notes.md). Class names come from Elden Ring's RTTI (same
+engine; AC6's exe has none), each matched to AC6 by layout and code: see [er-port.md](er-port.md).
 
 ## How the game loads menu movies
 
 - Every menu is an entry in the **menu table** (`0x144e28cf0`, filled at startup by `0x1401d44e0`): a name, a layer
   and a "resident" flag. Name to file: `menu:/<name>.gfx` (lowercased on disk: `menu\01_garagetopmenu.gfx`).
 - At boot the game **requests all menu files** into an in-memory file repository (`[0x144e245b0]`). The game's
-  Scaleform file opener only reads from there, and each file is dropped from it once its movie is built. After boot,
-  the files are gone from memory.
+  Scaleform file opener (`0x1415f40b0`) only reads from there, and each file is dropped from it once its movie is
+  built. After boot, the files are gone from memory, and the opener's own disk read is switched off (a `jnz` at
+  `0x1415f427d`), so a menu file can't be opened a second time.
+- me3 replaces the path of every file it overrides with a token (`\\me3??54`); stock files keep their archive path
+  (`data0:/menu/01_900_black.gfx`).
 - Built movies are **cached** by the scaleform system (`[[0x144e28818]+8]`, cache map at `+0x9b8`; probably ER's
   `CS::CSScaleformImp`, not confirmed yet). Opening a menu looks the movie up there first.
 - A movie on screen is a **player** made from the cached movie. Players belong to **windows**, and a window is
@@ -18,12 +21,14 @@ matched to AC6 by layout and code: see [er-port.md](er-port.md).
 
 ## What the tool does
 
-1. **Disk fallback.** The file opener still contains a disk read for files that aren't in the repository, disabled
-   by one `jnz` (`0x1415f427d`). The tool NOPs it at load, so any menu file that isn't in memory is read from disk,
-   through me3, so it's the package's current file.
+1. **Read mod files from disk.** The tool hooks the file opener: every path that isn't an archive path (a root
+   name, then `:/`) is a mod's file and goes to Scaleform's default opener (`0x141a7bfb0`), which reads the file
+   itself, through me3, so it's the package's current file. Archive paths are left to the game. So exactly the
+   package's files are read from disk, on every open, boot included. After such a read the hook releases the file's
+   repository entry with the game's own lookup and release (`0x14153d3d0`, `0x1416040c0`), as the game's opener
+   does after opening from the repository, so the repository empties exactly as in the stock game.
 2. **Release.** For each changed menu it releases the cached movie (properly, so Scaleform frees it and doesn't hand
-   it back), and drops any leftover boot copy of the file from the repository. Two files are requested twice at
-   boot and opened once (`01_070_CommandList`, `01_900_Black`); loading their stale copy killed the game.
+   it back). The next open of that menu loads the file again, through the hook.
 3. **Reopen what's on screen.** Two kinds of windows:
    - **Self-owned windows** (`CS::MenuWindowJob`: garage menus, HUD, fades, captions...): each builds its own
      controller when it opens, through a factory `std::function` its creator passed in (`+0x70`/`+0xa8`). The tool
@@ -44,14 +49,14 @@ matched to AC6 by layout and code: see [er-port.md](er-port.md).
 
 ## Elden Ring
 
-Same engine, same steps 2 to 4 (addresses in [er-port.md](er-port.md)). Step 1 differs:
+Same engine, same four steps, same hook (addresses in [er-port.md](er-port.md)). What differs is the store the hook
+bypasses: ER's (`CS::GfxRepositoryImp`) **keeps** the boot copy of every menu file, and its file opener
+(`CS::CSScaleformFileOpener`, `0x140d6e970`) has no disk read for menu files at all, so without the hook a released
+movie is rebuilt from the boot copy. The default opener is `0x141159f50`. ER's store is left alone (it keeps its
+entries in the stock game too).
 
-- ER's in-memory store (`CS::GfxRepositoryImp`) **keeps** the boot copy of every menu file, and the file opener
-  (`CS::CSScaleformFileOpener`) has no disk read for menu files at all: a released movie would be rebuilt from the
-  boot copy.
-- me3 replaces the path of every file it overrides with a token (`\\me3??54`); stock files keep their archive path
-  (`data0:/menu/01_900_black.gfx`). The tool hooks the file opener and sends every path that isn't an archive path
-  to Scaleform's default opener, which reads the file itself. So exactly the package's files are read from disk, and nothing else changes.
+- AC6's panel open and close also keep a per-name count in the menu manager; ER's don't, so there the tool closes a
+  panel by hand (close the player, clear the panel's field).
 - Quirk: reloading the HUD replays the "runes gained" animation for your whole total (display only).
 
 ## Limits found

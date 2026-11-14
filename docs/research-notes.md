@@ -157,8 +157,36 @@ all normal (run B); the three-menu reload above also ran with Arxan on.
   from a fresh unzip.
 - `01_SystemToast` (how toasts are driven) was worked out in its own project, Toast-Wrapper (`system-toast`).
 
-## Planned: Elden Ring support
+## Elden Ring support (2026-11-14)
 
-Make gfx-reloader support both AC6 and Elden Ring in one DLL (game detected at load, game-specific addresses and
-offsets in a per-game table, shared logic unchanged), like Toast-Wrapper. In progress: [er-port.md](er-port.md) (what's
-matched so far, with evidence, and what's left). Debug with `--disable-arxan`, test with it on.
+One DLL for both games (game detected at load by exe name, addresses in a per-game table, shared logic): see
+[er-port.md](er-port.md) for what was matched, with evidence, and how ER reads edited files.
+
+## One file opener hook for both games (2026-11-14)
+
+The ER port needed a hook on the file opener (ER has no disk read to re-enable). AC6 then moved to the same hook,
+which replaced the disk-fallback patch and the leftover purge described above.
+
+- AC6 has the same Scaleform default file opener as ER: `0x141a7bfb0`, the only match for the first 40 bytes of
+  ER's `0x141159f50` (they differ in relative call offsets only). AC6's own disk read can't be called: it's inline
+  code in the opener `0x1415f40b0` (after the `jnz` at `0x1415f427d`), not a function.
+- AC6's opener gets the same two kinds of path as ER's. Boot with the full test package: 112 opens, 107 with me3
+  tokens (all read by the default opener, none failed) and 5 archive paths (three fonts and
+  `data0:/menu/02_gaitemstatus_general_minimum.gfx`, twice), left to the game.
+- The mod's files skip the repository, so on its own the hook would leave their entries unopened and unreleased
+  for the whole session (tested that way first: boot, garage, Assembly and AC TEST were normal, Arxan on). The hook
+  now does the game's bookkeeping itself. The stock opener (instructions `0x1415f41f4`..`0x1415f4254`): lookup
+  `0x14153d3d0`(repository `[0x144e245b0]`, a wide copy of the path it was given), take the file from the entry
+  (`0x14153dc50`), then, if the flag function `0x14171da90` says so, release `0x1416040c0`(system = opener `+0x18`,
+  entry). The same flag gates the disk read on a miss (the `jnz`): it looks like a shipping/development switch
+  (off: entries kept, misses read from disk).
+- The hook's lookup with the me3 token finds the entries. Boot with the full package: 107 disk reads, 104 entries
+  gone after one release, 2 still there (`01_070_CommandList` and `01_900_Black`, requested twice: their second
+  copies, as in the stock game). One later open (157 s) had no entry left, as expected.
+- The leftover crash can't happen any more: a reloaded file never comes from the repository. Reloading
+  `01_900_Black` read it from disk, found its second copy and released it (gone afterwards). Also tested:
+  `01_GarageTopMenu` live; `02_058_DetailStatus_Player_2P` as a panel preview; `01_000_FE` reloaded while off screen
+  and read from disk on entering AC TEST.
+- Removed: the `jnz` patch (the tool no longer changes game code, it only hooks), the path builder call and the
+  purge loop, and the per-game choice between two mechanisms. Kept, AC6 only: the lookup and release, now called
+  once per disk read.
