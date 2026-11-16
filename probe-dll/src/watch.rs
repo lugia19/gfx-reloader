@@ -1,10 +1,5 @@
-//! Hardware write watchpoint (debug register DR0) on one byte, to find what writes it. Used for `CSMenuMan+0x10`,
-//! the flag the main-menu windows' close check reads (see ..\README.md).
-//!
-//! F5 arms it on every thread that exists at that moment (threads created later are not covered) and disarms it on
-//! the next press. A vectored exception handler catches the single-step trap the CPU raises after each write and
-//! logs the writing instruction (the trap reports the address of the instruction *after* the write) with the new
-//! value: the first time each (instruction, value) pair is seen, and every time the value changes.
+//! DR0 1-byte write watchpoint (F5), used on `CSMenuMan+0x10`. Only threads existing when armed.
+//! Needs --disable-arxan. Logs the instruction after each write, per new (instruction, value) or value change.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -29,15 +24,14 @@ const STATUS_SINGLE_STEP: u32 = 0x8000_0004;
 const EXCEPTION_CONTINUE_EXECUTION: i32 = -1;
 const EXCEPTION_CONTINUE_SEARCH: i32 = 0;
 
-/// GetThreadContext/SetThreadContext need a 16-byte aligned CONTEXT, but windows-sys 0.59 declares the x86-64
-/// CONTEXT as plain repr(C) (8-byte alignment), so a stack CONTEXT can land misaligned and every call fails.
+/// windows-sys 0.59's CONTEXT is only 8-aligned; Get/SetThreadContext fail unless 16-aligned.
 #[repr(C, align(16))]
 struct AlignedContext(CONTEXT);
 
 static ARMED: AtomicBool = AtomicBool::new(false);
 static WATCHED: AtomicUsize = AtomicUsize::new(0);
 static HANDLER_ADDED: AtomicBool = AtomicBool::new(false);
-/// (instruction after the write, value written) -> hits; and the last value seen.
+/// (rip, value) -> hits, last value.
 static HITS: Mutex<Option<(HashMap<(usize, u8), u64>, Option<u8>)>> = Mutex::new(None);
 
 unsafe extern "system" fn handler(info: *mut EXCEPTION_POINTERS) -> i32 {
@@ -71,7 +65,6 @@ unsafe extern "system" fn handler(info: *mut EXCEPTION_POINTERS) -> i32 {
     EXCEPTION_CONTINUE_EXECUTION
 }
 
-/// Sets (addr = Some) or clears (None) DR0 as a 1-byte write watchpoint on every other thread of the process.
 fn set_on_all_threads(addr: Option<usize>) -> (usize, usize) {
     let (mut done, mut failed) = (0, 0);
     let mut first_error: Option<String> = None;
@@ -141,7 +134,6 @@ fn set_on_all_threads(addr: Option<usize>) -> (usize, usize) {
     (done, failed)
 }
 
-/// F5: arm on `addr` / disarm.
 pub fn toggle(addr: usize) {
     if !HANDLER_ADDED.swap(true, Ordering::Relaxed) {
         unsafe { AddVectoredExceptionHandler(1, Some(handler)) };

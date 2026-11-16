@@ -5,10 +5,7 @@
     python -I tools/tint.py 02_coloring --restore  # stock file back
     python -I tools/tint.py --game er 01_000_FE 00FF00   # Elden Ring (tests/mod-er)
 
-Every PlaceObject2/3 that places a character (in the root timeline and in every sprite) gets a color transform
-multiplying RGB by the given color; existing color transforms are scaled by it (add terms and alpha kept). Pure
-channels (00FF00, FF00FF...) compound to the same tint through nested sprites. Objects created by ActionScript
-inherit the tint of the clip they're attached to. Reads the stock file from the game's unpacked menu folder.
+Scales the color transform of every placed object (root and sprites); pure channels survive nesting.
 """
 import argparse, os, shutil, struct, zlib
 

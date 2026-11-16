@@ -1,5 +1,5 @@
-//! Client for toast_wrapper.dll (copy this file into your mod, then `mod toast_wrapper_client;`). It finds the DLL's
-//! exports when called, so load order doesn't matter, and does nothing if toast_wrapper.dll isn't loaded.
+//! Client for toast_wrapper.dll: copy into your mod, `mod toast_wrapper_client;`.
+//! Resolves exports on first call (load order doesn't matter); no-op without the DLL.
 //!
 //! ```ignore
 //! toast_wrapper_client::show("Saved");            // the game's own timing
@@ -26,9 +26,7 @@ unsafe extern "system" {
     fn GetProcAddress(module: usize, name: *const u8) -> usize;
 }
 
-/// The oldest API version this client works with (exports never change signature; newer DLLs only add exports).
 const NEEDED_VERSION: u32 = 2;
-/// "toast_wrapper.dll", UTF-16, null-terminated.
 const DLL_NAME: [u16; 18] = {
     let ascii = *b"toast_wrapper.dll\0";
     let mut wide = [0u16; 18];
@@ -42,7 +40,7 @@ const DLL_NAME: [u16; 18] = {
 
 static API: OnceLock<Api> = OnceLock::new();
 
-/// The DLL's exports, looked up until found once (natives are never unloaded, so the cache stays valid).
+// Cached once found; natives never unload.
 fn api() -> Option<&'static Api> {
     if let Some(api) = API.get() {
         return Some(api);
@@ -64,19 +62,17 @@ fn api() -> Option<&'static Api> {
     Some(API.get_or_init(|| Api { show, show_for, version }))
 }
 
-/// Queues a text for the game's announce banner, with the game's own timing. False if toast_wrapper.dll isn't
-/// loaded or refused it.
+/// Queues a text with the game's timing. False if the DLL is missing or refused it.
 pub fn show(text: &str) -> bool {
     api().is_some_and(|api| unsafe { (api.show)(text.as_ptr(), text.len()) })
 }
 
-/// Queues a text that stays on screen for `seconds` (longer or shorter than the game's timing). False if
-/// toast_wrapper.dll isn't loaded, is older than API 3, or refused it.
+/// Queues a text for `seconds`. False if the DLL is missing, older than API 3, or refused it.
 pub fn show_for(text: &str, seconds: f32) -> bool {
     api().and_then(|api| api.show_for).is_some_and(|show_for| unsafe { show_for(text.as_ptr(), text.len(), seconds) })
 }
 
-/// The DLL's API version, None if it isn't loaded (or older than this client).
+/// None if the DLL is missing or too old.
 pub fn api_version() -> Option<u32> {
     api().map(|api| (api.version)())
 }

@@ -1,44 +1,33 @@
-//! The supported games: where each piece lives (offsets from the exe base, since Elden Ring's exe can be moved by
-//! ASLR) and how its structures are laid out, plus small memory helpers. How the pieces fit together:
-//! ../../docs/how-it-works.md; how the Elden Ring side was matched: ../../docs/er-port.md.
+//! Per-game addresses (offsets from the exe base, ER has ASLR) and layouts, plus memory helpers.
+//! See ../../docs/how-it-works.md and ../../docs/er-port.md.
 
 use std::sync::OnceLock;
 
-/// A game function: offset from the exe base, and its first bytes (checked before use; another mod's `jmp` hook is
-/// accepted too).
+/// Offset from the exe base and expected first bytes.
 pub struct Code {
     pub rva: usize,
     pub prologue: [u8; 8],
 }
 
-/// How a scaleform map node stores its key (a menu name).
 pub enum MapKey {
-    /// wchar pointer and length (AC6).
+    /// AC6: wchar pointer + length.
     PointerAndLength { pointer: usize, length: usize },
-    /// `std::wstring` (Elden Ring): the characters are inline while the capacity is below 8, else behind a pointer.
+    /// ER: `std::wstring`, inline while capacity < 8.
     WString { text: usize, length: usize, capacity: usize },
 }
 
-/// The game's scaleform file opener (`CS::CSScaleformFileOpener`, vtable +8) serves menu files from a store filled at
-/// boot and never reads an edited file: its disk read is behind the debug property `Scaleform.SwfCache`, which is
-/// on (a constant in AC6, the default in Elden Ring). Elden Ring's store (`CS::GfxRepositoryImp`) keeps every file;
-/// AC6's empties as movies open. The tool hooks the opener and sends every path that isn't an archive path (a mod's
-/// file) to Scaleform's default opener, which reads the file itself. Both take (this, utf-8 url, flags, mode) ->
-/// file.
+/// `CS::CSScaleformFileOpener` (vtable +8) only serves files from a store filled at boot (`Scaleform.SwfCache` on).
+/// Mod files go to Scaleform's default opener instead. Both: (this, utf-8 url, flags, mode) -> file.
 pub struct FileOpener {
     pub open: Code,
     pub default_open: Code,
-    /// The opener's "modification time of this file" (vtable +0x10; Scaleform's own, whole seconds): (this, utf-8
-    /// url) -> time. Scaleform identifies a loaded movie by its path and this time, and hands back the movie it has
-    /// when both match, without opening the file. The tool hooks it so a reloaded file never matches.
+    /// vtable +0x10, (this, url) -> time. Scaleform reuses a loaded movie when path and time match; hooked to break that.
     pub modify_time: Code,
-    /// Where the game's opener releases a file's store entry after opening it (AC6), so the hook can do the same for
-    /// the files it reads from disk. None where the store keeps its entries anyway (Elden Ring).
+    /// AC6 only: its store drops entries after opening, so we release them too.
     pub store: Option<Store>,
 }
 
-/// AC6's in-memory file repository: its pointer, the lookup (repository, wchar path) -> entry, and the release of
-/// one reference (system, entry). The opener keeps the scaleform system at +0x18.
+/// AC6 file repository: lookup (repository, wchar path) -> entry, release (system, entry). System at opener+0x18.
 pub struct Store {
     pub repository: usize,
     pub lookup: Code,
@@ -49,31 +38,27 @@ pub const OPENER_SYSTEM: usize = 0x18;
 
 pub struct Game {
     pub name: &'static str,
-    /// The exe's file name, lowercase.
+    /// Lowercase.
     pub exe: &'static str,
-    /// Menu table: entries of 16 bytes {int layer, byte resident (+4), wchar* name (+8)}, filled at startup.
+    /// 16-byte entries {int layer, byte resident (+4), wchar* name (+8)}.
     pub menu_table: usize,
     pub menu_count: usize,
-    /// `[[scaleform_holder] + 8]` = the scaleform system.
+    /// `[[holder] + 8]` = scaleform system.
     pub scaleform_holder: usize,
-    /// The system's movie cache: std::map head node pointer, node key layout, cached movie wrapper in the node
-    /// (refcount +8, vtable slot 0 destroys it).
+    /// Movie cache std::map; node value = movie wrapper (refcount +8, vtable slot 0 destroys).
     pub cache_map_head: usize,
     pub map_key: MapKey,
     pub node_value: usize,
-    /// Active players (what gets drawn): fixed vector of {player, int open count} (16 bytes), its count and capacity.
+    /// Drawn players: fixed vector of 16-byte {player, int open count}.
     pub active_list: usize,
     pub active_count: usize,
     pub active_max: usize,
-    /// Self-owned windows (`CS::MenuWindowJob`): per-frame step (vtable +0x10), the window's own close, and the
-    /// vtable of a `std::function` holding a plain function pointer (the usual control check).
+    /// `CS::MenuWindowJob`: step (vtable +0x10), close, and the vtable of a plain-function `std::function`.
     pub window_step: Code,
     pub window_close: Code,
     pub function_pointer_function: usize,
-    /// Embedded panels (`CS::MenuResource`): open; their close where the game has one; the scaleform system's player
-    /// close (system, player), which every panel close goes through. AC6's open and close also keep a per-name count
-    /// in the menu manager (map at +0x98), so its panels must be closed with its close; Elden Ring has no such count
-    /// and closes the player inline.
+    /// `CS::MenuResource`. AC6 keeps a per-name count (menu manager +0x98), so its panels need its own close;
+    /// ER has none and closes the player inline.
     pub panel_open: Code,
     pub panel_close: Option<Code>,
     pub player_close: Code,
@@ -81,7 +66,6 @@ pub struct Game {
 }
 
 impl Game {
-    /// Every game function the tool hooks or calls through a `Code` (checked by `detect`).
     fn functions(&self) -> Vec<&Code> {
         let opener = &self.file_opener;
         let mut functions = vec![&self.window_step, &self.window_close, &self.panel_open, &self.player_close];
@@ -151,18 +135,15 @@ const GAMES: [Game; 2] = [
     },
 ];
 
-// Layouts shared by both games.
-/// Self-owned window: menu name pointer, open factory (`std::function` impl pointer), control check (`std::function`
-/// `<MenuWindowJob::MenuCtrlType()>`: inline storage, impl pointer), controller.
+// Shared by both games. Window: name, factory and close check (`std::function` storage / impl), controller.
 pub const WINDOW_NAME: usize = 0x60;
 pub const WINDOW_FACTORY: usize = 0xa8;
 pub const WINDOW_CLOSE_CHECK_STORAGE: usize = 0xf0;
 pub const WINDOW_CLOSE_CHECK: usize = 0x128;
 pub const WINDOW_CONTROLLER: usize = 0x130;
-/// Embedded panel: menu name pointer, player.
 pub const PANEL_NAME: usize = 0x50;
 pub const PANEL_PLAYER: usize = 0x60;
-/// A player keeps its menu table entry copy at +0x20, name pointer +0x28.
+/// In the player's menu table entry copy (+0x20).
 const PLAYER_NAME: usize = 0x28;
 
 static GAME: OnceLock<&'static Game> = OnceLock::new();
@@ -172,22 +153,18 @@ unsafe extern "system" {
     fn GetModuleHandleW(name: *const u16) -> usize;
 }
 
-/// The detected game (after `detect`).
 pub fn game() -> &'static Game {
     GAME.get().expect("game not detected")
 }
 
-/// Address of an offset from the exe base.
 pub fn at(rva: usize) -> usize {
     BASE.get().expect("game not detected") + rva
 }
 
-/// Address of a game function.
 pub fn code(code: &Code) -> usize {
     at(code.rva)
 }
 
-/// Finds the running game by its exe and checks the functions the tool hooks or calls (`Game::functions`).
 pub fn detect() -> Result<&'static Game, String> {
     let exe = std::env::current_exe()
         .ok()
@@ -197,7 +174,7 @@ pub fn detect() -> Result<&'static Game, String> {
     let _ = BASE.set(unsafe { GetModuleHandleW(std::ptr::null()) });
     let _ = GAME.set(game);
     for function in game.functions() {
-        // another mod's hook (a `jmp`) at the start is fine
+        // another mod's jmp hook is fine
         if unsafe { read::<u8>(code(function)) } != 0xe9 {
             check_bytes(code(function), function.prologue)?;
         }
@@ -234,7 +211,6 @@ pub unsafe fn wide_str(ptr: *const u16, max: usize) -> String {
     String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(ptr, len) })
 }
 
-/// Name stored behind a wchar pointer at `addr` (window/panel name fields, menu table entries).
 pub unsafe fn name_at(addr: usize) -> String {
     unsafe { wide_str(read::<usize>(addr) as *const u16, 128) }
 }
@@ -252,7 +228,7 @@ pub fn scaleform_system() -> usize {
     if holder == 0 { 0 } else { unsafe { read(holder + 8) } }
 }
 
-/// Menu names of every active player, i.e. every menu movie on screen (game thread).
+/// Game thread.
 pub unsafe fn active_menu_names(system: usize) -> Vec<String> {
     let game = game();
     let count: usize = unsafe { read(system + game.active_count) };
@@ -279,7 +255,7 @@ unsafe fn node_key(node: usize) -> String {
     }
 }
 
-/// The movie cache node for a menu (MSVC std::map: left +0, parent +8, right +0x10, is-nil byte +0x19).
+/// MSVC std::map node: left +0, parent +8, right +0x10, is-nil +0x19.
 pub unsafe fn cache_node(system: usize, name: &str) -> Option<usize> {
     let head: usize = unsafe { read(system + game().cache_map_head) };
     if head == 0 {

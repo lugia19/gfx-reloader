@@ -1,11 +1,9 @@
-"""Builds a self-contained test kit for someone else: the tool, the toast DLL, an me3 profile with its own save, a
-package with the stock HUD, and colored HUD variants to swap in. Output: dist/<kit name>/ and its zip.
+"""Builds a test kit (tool, toast DLL, me3 profile with its own save, stock + tinted HUDs) in dist/, plus a zip.
 
     python -I tools/make_test_kit.py                        # Armored Core VI -> dist/gfx-reloader-test
     python -I tools/make_test_kit.py --game er --no-readme  # Elden Ring       -> dist/gfx-reloader-test-er
 
-Needs the built DLLs: dll/target/release/gfx_reloader.dll and tests/toast-build/release/toast_wrapper.dll
-(docs/development.md says how to build the toast one).
+Needs dll/target/release/gfx_reloader.dll and tests/toast-build/release/toast_wrapper.dll (docs/development.md).
 """
 import argparse, os, shutil, struct, sys
 

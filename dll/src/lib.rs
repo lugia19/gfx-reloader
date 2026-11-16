@@ -1,9 +1,5 @@
-//! gfx-reloader: reload edited menu movies (.gfx) in the running game, for Armored Core VI and Elden Ring.
-//! Usage: ../../README.md; how it works: ../../docs/how-it-works.md.
-//!
-//! F7 reloads the menu files that changed in the package since the last reload; F8 turns the file watcher on/off
-//! (off at start); F9 lists the menu movies on screen. Log: Game\debug-logs\gfx_reloader.log. With
-//! toast_wrapper.dll (Toast-Wrapper) loaded, results also show in the game's announce banner.
+//! gfx-reloader: reload edited menu .gfx in the running game (AC6, Elden Ring). See ../../README.md.
+//! F7 reload changed files, F8 file watcher, F9 list menus on screen. Log: Game\debug-logs\gfx_reloader.log.
 
 mod files;
 mod game;
@@ -21,8 +17,7 @@ use retour::RawDetour;
 const VK_F7: i32 = 0x76;
 const VK_F8: i32 = 0x77;
 const VK_F9: i32 = 0x78;
-/// Characters per announce-banner message: Toast-Wrapper says about 150 fit before it scrolls, minus its 18-space
-/// indent to be safe.
+/// ~150 fit in the banner, minus Toast-Wrapper's 18-space indent.
 pub const TOAST_LINE: usize = 130;
 const WATCH_INTERVAL: Duration = Duration::from_millis(500);
 
@@ -44,27 +39,22 @@ pub fn log(line: &str) {
     }
 }
 
-/// Seconds a message stays in the announce banner: status lines, and lines that take reading (warnings, lists).
 const TOAST_SECONDS: f32 = 4.0;
 pub const TOAST_LONG_SECONDS: f32 = 8.0;
 
-/// Shows a one-line status message in the game's announce banner if toast_wrapper.dll is loaded (does nothing
-/// otherwise). Messages queue, so keep them few.
+/// No-op without toast_wrapper.dll.
 pub fn toast(text: &str) {
     toast_for(text, TOAST_SECONDS);
 }
 
-/// `toast` with its time on screen. A toast_wrapper.dll older than 0.4 has no durations: the game's timing (about
-/// 13 s) is used then.
+/// toast_wrapper.dll < 0.4 has no durations.
 pub fn toast_for(text: &str, seconds: f32) {
     if !toast_wrapper_client::show_for(text, seconds) {
         toast_wrapper_client::show(text);
     }
 }
 
-/// The package folder to watch, first found of: `package = <folder>` from a gfx_reloader.ini next to the DLL; the
-/// `mod` folder next to the DLL (the usual mod layout); a gfx_reloader.ini in a folder above the DLL (development,
-/// where the DLL sits in dll\target\release).
+/// First of: gfx_reloader.ini next to the DLL, `mod` next to the DLL, gfx_reloader.ini above it (dev builds).
 fn package_from_config(dll: &Path) -> Option<PathBuf> {
     let folder = dll.parent().unwrap_or(Path::new("."));
     let ini_next_to_dll = folder.join("gfx_reloader.ini");
@@ -89,12 +79,11 @@ fn package_from_config(dll: &Path) -> Option<PathBuf> {
         .filter_map(|l| l.split_once('='))
         .map(|(key, value)| (key.trim(), value.trim()))
         .collect();
-    // `package_<exe name>` (e.g. package_eldenring) wins over `package`, so one ini can serve both games
+    // package_<exe name> wins over package
     let per_game = format!("package_{}", game::game().exe.trim_end_matches(".exe"));
     let setting = |wanted: &str| settings.iter().find(|(key, _)| *key == wanted).map(|(_, value)| *value);
     let package = setting(&per_game)
         .or_else(|| setting("package"))
-        // a relative path is relative to the ini's folder
         .map(|value| ini.parent().unwrap_or(Path::new(".")).join(value));
     if package.is_none() {
         log(&format!("{}: no `package = ...` line; F7/F8 do nothing", ini.display()));
@@ -102,7 +91,6 @@ fn package_from_config(dll: &Path) -> Option<PathBuf> {
     package
 }
 
-/// Detours a game function (its bytes were checked by `game::detect`).
 unsafe fn hook(function: &game::Code, detour: *const (), original: &AtomicUsize) -> Result<(), String> {
     let d = unsafe { RawDetour::new(game::code(function) as *const (), detour) }.map_err(|e| e.to_string())?;
     original.store(d.trampoline() as *const () as usize, Ordering::Relaxed);
@@ -123,8 +111,7 @@ fn install() -> Result<&'static game::Game, String> {
     Ok(game)
 }
 
-/// Reloads the menus whose files changed. `asked` = the user pressed F7, so "nothing changed" is worth saying; the
-/// watcher stays quiet about it (it also wakes up for deleted files and for files that aren't menus).
+/// `asked`: F7 (report "nothing changed"); the watcher stays quiet.
 fn reload_changes(files: &mut files::MenuFiles, asked: bool) {
     let names = files.take_changes();
     if names.is_empty() {
@@ -138,7 +125,7 @@ fn reload_changes(files: &mut files::MenuFiles, asked: bool) {
     reload::request(names);
 }
 
-/// Own thread: reads the config and snapshots the package (kept out of DllMain), then polls F7/F8 and the watcher.
+/// Own thread, keeps file I/O out of DllMain.
 fn key_loop(dll: PathBuf) {
     let Some(package) = package_from_config(&dll) else { return };
     let mut files = files::MenuFiles::new(&package);

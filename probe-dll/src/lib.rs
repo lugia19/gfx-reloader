@@ -1,25 +1,10 @@
-//! gfx-reloader research probe (Armored Core VI 1.09.1, stock exe, me3 0.13.0): the first version of the tool, kept
-//! for research. It reloads edited menu movies and logs enough to see what the game does with them. Findings:
-//! ..\..\docs\research-notes.md.
+//! gfx-reloader research probe (AC6 1.09.1): the tool's first version, with verbose logging.
+//! Findings: ..\..\docs\research-notes.md. Log: Game\debug-logs\gfx_reloader_probe.log.
+//! Reload = disk fallback patch + release the movie's cache entry.
 //!
-//! How a reload works: the disk fallback patch (6 NOPs over the `jnz` at 0x1415f427d) makes the game's Scaleform
-//! OpenFile read a file from disk when it isn't in the in-memory file repository (after boot, none are). Releasing
-//! a movie's cache entry (CSScaleformSystem+0x9b8 map) makes the next lookup load it again, from disk.
-//!
-//! Keys (polled every 50 ms; never F6, it doesn't reach the game on lugia19's machine):
-//! - F7: compare the package's menu files with the last snapshot; changed files' movies get released at the next
-//!   lookup (game thread). Turns the disk fallback on if it isn't.
-//! - F8: release every cached menu movie at the next lookup.
-//! - F9: dump the movie cache, the player map (+0x9d8) and the active player list (+0x9e8) at the next lookup.
-//! - F11: toggle the disk fallback patch.
-//!
-//! Config `gfx_reloader.ini`, looked up next to the DLL and in its parent folders:
-//!   package = <me3 package folder whose menu\ is watched>
-//!   disk_fallback = boot | on_reload     (boot: patch at load, before the game's boot requests)
-//!
-//! Log: Game\debug-logs\gfx_reloader_probe.log. Lookups, menu opens (player reused or new), loads, CreateMovie results
-//! (flagging an unchanged MovieDef, i.e. Scaleform's library cache), OpenFile with where the file came from
-//! (repository / disk / failed), file requests, and Scaleform's own log messages.
+//! F5 watchpoint on CSMenuMan+0x10, F7 reload changed files, F8 release every movie, F9 state dump,
+//! F10 break test (close every player), F11 toggle disk fallback. Never F6.
+//! gfx_reloader.ini (next to the DLL or above): package = <folder>, disk_fallback = boot | on_reload.
 
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -34,39 +19,32 @@ use retour::RawDetour;
 
 mod watch;
 
-/// CSMenuMan singleton pointer (ER's CSMenuManImp). +0x10 / +0x748: the bytes the main-menu close check reads.
+/// CSMenuMan (ER CSMenuManImp); +0x10 / +0x748 are read by the main-menu close check.
 const CS_MENU_MAN: usize = 0x144e15530;
-/// vtable of the std::function implementation that wraps a plain function pointer (no captured state).
+/// std::function impl wrapping a plain function pointer.
 const FN_POINTER_FUNCTION_VTABLE: usize = 0x14390e4f0;
 
 // ---- game addresses (1.09.1) --------------------------------------------------------------------------------------
 
-/// Menu movie lookup (CSScaleformSystem*, out wrapper, table entry): cache hit, or load (and cache when resident).
+/// (system, out wrapper, table entry): cache hit, or load (cached when resident).
 const LOOKUP_ADDR: usize = 0x141609040;
 const LOOKUP_PROLOGUE: [u8; 8] = [0x40, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55];
-/// Opens a menu (CSScaleformSystem*, table entry, flag) -> player: lookup, then the player from the player map
-/// (reused if it exists, else a new 0xe8 one), started once (player+0x78) and added to the active list.
+/// (system, table entry, flag) -> player: reused from the player map or a new 0xe8 one, then made active.
 const OPEN_MENU_ADDR: usize = 0x1416069a0;
 const OPEN_MENU_PROLOGUE: [u8; 8] = [0x48, 0x8b, 0xc4, 0x55, 0x56, 0x57, 0x48, 0x83];
-/// Closes a menu (CSScaleformSystem*, player): the player keeps its table entry copy at +0x20 (name +0x28).
-/// Reached through the facade 0x1415f3150 (tail jump), called by the menu windows' close methods.
+/// (system, player); reached via facade 0x1415f3150. Player keeps its table entry copy at +0x20.
 const CLOSE_MENU_ADDR: usize = 0x141606b10;
 const CLOSE_MENU_PROLOGUE: [u8; 8] = [0x40, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55];
 const PLAYER_NAME: usize = 0x28;
-/// Menu window methods (one class family; vtables 0x1444f2c18 / 0x1444f32a0...). Window: table entry copy at +0x48
-/// (name +0x50). Open A stores its player at +0x58 (movie instance +0x8, C++ binding +0xa0 made by the factory at
-/// +0x98); open B and close B use +0x60.
+/// Panel windows: name +0x50; open A player +0x58 (instance +0x8, binding +0xa0), open/close B +0x60.
 const WINDOW_OPEN_A_ADDR: usize = 0x140c8aa60;
 const WINDOW_OPEN_A_PROLOGUE: [u8; 8] = [0x40, 0x55, 0x56, 0x57, 0x48, 0x83, 0xec, 0x40];
 const WINDOW_OPEN_B_ADDR: usize = 0x140c8acf0;
 const WINDOW_OPEN_B_PROLOGUE: [u8; 8] = [0x48, 0x8b, 0xc4, 0x57, 0x48, 0x81, 0xec, 0xc0];
 const WINDOW_CLOSE_B_ADDR: usize = 0x140c8aff0;
 const WINDOW_CLOSE_B_PROLOGUE: [u8; 8] = [0x40, 0x57, 0x48, 0x83, 0xec, 0x30, 0x48, 0x8b];
-/// Main-menu window (vtable 0x14390e498; 01_GarageTopMenu, 02_010_EquipTop...): table entry copy +0x58 (name
-/// pointer +0x60), player +0x68, movie instance +0x10, controller +0x130, open factory +0xa8, command object +0x128.
-/// Slot +0x10 = per-frame step: with no controller and a factory it opens (player, instance, controller); when the
-/// controller says it's done it closes. Close 0x14641c16c(window): disposes the controller (+0x130 = 0), closes the
-/// player (+0x68 = 0), destroys +0x128; the factory stays, so the next step reopens the window.
+/// Main-menu window (vtable 0x14390e498). Step (slot +0x10) opens when there's no controller but a factory; the close
+/// clears controller, player and +0x128 but keeps the factory, so the next step reopens.
 const WINDOW_STEP_ADDR: usize = 0x140d61af0;
 const WINDOW_STEP_PROLOGUE: [u8; 8] = [0x4c, 0x89, 0x44, 0x24, 0x18, 0x55, 0x53, 0x56];
 const WINDOW_CLOSE_ADDR: usize = 0x14641c16c;
@@ -76,47 +54,46 @@ const MAIN_WINDOW_PLAYER: usize = 0x68;
 const MAIN_WINDOW_FACTORY: usize = 0xa8;
 const MAIN_WINDOW_COMMAND: usize = 0x128;
 const MAIN_WINDOW_CONTROLLER: usize = 0x130;
-/// Cache-miss loader (loader, out wrapper, wchar path, ?).
+/// (loader, out wrapper, wchar path, ?)
 const LOADER_ADDR: usize = 0x1415faa20;
 const LOADER_PROLOGUE: [u8; 8] = [0x48, 0x8b, 0xc4, 0x48, 0x89, 0x50, 0x10, 0x55];
 /// Scaleform CreateMovie (loader, utf-8 path, flags, arena) -> MovieDef.
 const CREATE_MOVIE_ADDR: usize = 0x141a4c6f0;
 const CREATE_MOVIE_PROLOGUE: [u8; 8] = [0x45, 0x8b, 0xd0, 0x48, 0x8b, 0xc1, 0x48, 0x85];
-/// CSScaleformFileOpener::OpenFile (this, utf-8 url, flags, mode) -> Scaleform File.
+/// CSScaleformFileOpener::OpenFile (this, utf-8 url, flags, mode) -> file.
 const OPEN_FILE_ADDR: usize = 0x1415f40b0;
 const OPEN_FILE_PROLOGUE: [u8; 8] = [0x40, 0x55, 0x56, 0x57, 0x41, 0x56, 0x41, 0x57];
-/// Menu file request (system, wchar path): puts the file in the in-memory repository (boot requests all 109).
+/// (system, wchar path): puts a file in the repository.
 const REQUEST_ADDR: usize = 0x14160b820;
 const REQUEST_PROLOGUE: [u8; 8] = [0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83];
-/// Gives a repository file back to CSFile after OpenFile opened from it (only called on the repository path).
+/// Called by OpenFile only after opening from the repository.
 const RELEASE_OPENED_ADDR: usize = 0x1416040c0;
 const RELEASE_OPENED_PROLOGUE: [u8; 8] = [0x48, 0x89, 0x5c, 0x24, 0x10, 0x56, 0x48, 0x83];
 
-/// OpenFile's gate for the disk fallback after a repository miss: `call 0x14120759a` (always 1) / `test al,al` /
-/// this `jnz <return null>`. Six NOPs = fall through to the CSFile disk read (only this call site).
+/// jnz after the always-true 0x14120759a check; NOPed = repository misses read from disk.
 const DISK_FALLBACK_JNZ: usize = 0x1415f427d;
 const DISK_FALLBACK_ORIGINAL: [u8; 6] = [0x0f, 0x85, 0xfb, 0x01, 0x00, 0x00];
 
-/// 109 entries of 16 bytes: {int layer, byte resident (+4), wchar* name (+8)}.
+/// 16-byte entries {int layer, byte resident (+4), wchar* name (+8)}.
 const MENU_TABLE: usize = 0x144e28cf0;
 const MENU_TABLE_COUNT: usize = 0x6d;
 
 // ---- CSScaleformSystem layout ---------------------------------------------------------------------------------------
 
 const SYSTEM_LOADER: usize = 0x968;
-const LOADER_LOG: usize = 0x20; // CS::CSScaleformLog object at loader+0x20
-const SYSTEM_FILE_COUNT: usize = 0x980; // requested files still held (+0x970/+0x978)
-/// MSVC std::map heads (map object 8 bytes before): movie cache (value = wrapper) and players (value = player).
+const LOADER_LOG: usize = 0x20; // CS::CSScaleformLog
+const SYSTEM_FILE_COUNT: usize = 0x980; // held requested files
+/// std::map heads: movie cache (value = wrapper), players (value = player).
 const CACHE_MAP_HEAD: usize = 0x9c0;
 const PLAYER_MAP_HEAD: usize = 0x9d8;
-/// Active players: fixed vector of {player, int open count} (16 bytes), count at +0xdf0, max 64.
+/// 16-byte {player, int open count}, max 64.
 const ACTIVE_LIST: usize = 0x9e8;
 const ACTIVE_COUNT: usize = 0xdf0;
-/// Map nodes: left +0, parent +8, right +0x10, is-nil byte +0x19, key chars +0x28 / length +0x30, value +0x248.
+/// Node: left +0, parent +8, right +0x10, is-nil +0x19.
 const NODE_KEY: usize = 0x28;
 const NODE_KEY_LEN: usize = 0x30;
 const NODE_VALUE: usize = 0x248;
-/// Movie wrapper: 0x38 bytes, refcount +8, vtable slot 0 destroys. Player: 0xe8 bytes, started flag +0x78.
+/// Wrapper refcount +8, vtable slot 0 destroys. Player started flag +0x78.
 const WRAPPER_SIZE: usize = 0x38;
 const PLAYER_SIZE: usize = 0xe8;
 const PLAYER_STARTED: usize = 0x78;
@@ -149,13 +126,11 @@ static ORIG_LOOKUP: AtomicUsize = AtomicUsize::new(0);
 static ORIG_OPEN_MENU: AtomicUsize = AtomicUsize::new(0);
 static ORIG_CLOSE_MENU: AtomicUsize = AtomicUsize::new(0);
 static ORIG_WINDOW_STEP: AtomicUsize = AtomicUsize::new(0);
-/// Upper-case-insensitive menu names whose live main-menu window is closed and reopened at its next step.
 static PENDING_WINDOW_RELOAD: Mutex<Vec<String>> = Mutex::new(Vec::new());
-/// Live panel windows (vtable 0x1438e5238), from the open B / close B hooks: (window, menu name).
+/// Live panel windows (vtable 0x1438e5238).
 static PANEL_WINDOWS: Mutex<Vec<(usize, String)>> = Mutex::new(Vec::new());
-/// Menu names whose live panel windows are closed and reopened at the next main-menu window step (game thread).
 static PENDING_PANEL_RELOAD: Mutex<Vec<String>> = Mutex::new(Vec::new());
-/// Panels whose owners survive mission loads (seen 2026-11-13: closed only on return to the title screen).
+/// Owners survive mission loads; closed only on return to the title.
 const PERSISTENT_PANELS: [&str; 2] = ["01_MenuCommonBG", "02_OnlineArena_CommonBG"];
 const PANEL_PLAYER: usize = 0x60;
 const PANEL_MOVIE: usize = 0x8;
@@ -178,17 +153,15 @@ struct Config {
 }
 static CONFIG: OnceLock<Config> = OnceLock::new();
 
-/// Upper-case menu names whose cached movie is released at the next lookup (game thread).
 static PENDING_RELEASE: Mutex<Vec<String>> = Mutex::new(Vec::new());
 static DUMP_PENDING: AtomicBool = AtomicBool::new(false);
-/// Package menu files at the last snapshot: path -> (modified, size).
 static SNAPSHOT: Mutex<Option<HashMap<PathBuf, (SystemTime, u64)>>> = Mutex::new(None);
-/// Last MovieDef CreateMovie returned per path (an unchanged one = Scaleform's library handed back the old movie).
+/// Same MovieDef twice = Scaleform's library handed back the old movie.
 static LAST_MOVIE_DEF: Mutex<Option<HashMap<String, usize>>> = Mutex::new(None);
 static DISK_FALLBACK_ON: AtomicBool = AtomicBool::new(false);
 
 thread_local! {
-    /// Set by release_opened inside an OpenFile call: the file came from the repository.
+    /// Set by release_opened inside OpenFile.
     static OPENED_FROM_REPOSITORY: Cell<bool> = const { Cell::new(false) };
 }
 
@@ -205,7 +178,7 @@ unsafe extern "system" {
     fn RtlCaptureStackBackTrace(skip: u32, count: u32, frames: *mut usize, hash: *mut u32) -> u16;
 }
 
-/// Return addresses of the hook's callers inside the game exe (skips this function and the hook itself).
+/// Return addresses in the exe, skipping this function and the hook.
 fn callers() -> String {
     let mut frames = [0usize; 8];
     let n = unsafe { RtlCaptureStackBackTrace(2, frames.len() as u32, frames.as_mut_ptr(), std::ptr::null_mut()) };
@@ -257,7 +230,6 @@ unsafe fn c_str(ptr: *const u8, max: usize) -> String {
     String::from_utf8_lossy(unsafe { std::slice::from_raw_parts(ptr, len) }).into_owned()
 }
 
-/// Name of a menu table entry (or a copy of one).
 unsafe fn entry_name(entry: usize) -> String {
     unsafe { wide_str(read::<usize>(entry + 8) as *const u16, 128) }
 }
@@ -266,7 +238,6 @@ fn menu_names() -> Vec<String> {
     (0..MENU_TABLE_COUNT).map(|i| unsafe { entry_name(MENU_TABLE + i * 16) }).collect()
 }
 
-/// Every (node, key) of one of the system's std::maps.
 unsafe fn map_nodes(system: usize, head_offset: usize) -> Vec<(usize, String)> {
     let head: usize = unsafe { read(system + head_offset) };
     let mut out = Vec::new();
@@ -292,7 +263,7 @@ unsafe fn map_find(system: usize, head_offset: usize, name: &str) -> Option<usiz
     unsafe { map_nodes(system, head_offset) }.into_iter().find(|(_, key)| key == name).map(|(node, _)| node)
 }
 
-/// Value of a map entry: Some(value) (may be 0 when the node was emptied), None when there's no node.
+/// None = no node; Some(0) = emptied node.
 unsafe fn map_value(system: usize, head_offset: usize, name: &str) -> Option<usize> {
     unsafe { map_find(system, head_offset, name) }.map(|node| unsafe { read(node + NODE_VALUE) })
 }
@@ -304,7 +275,6 @@ fn describe(value: Option<usize>) -> String {
     }
 }
 
-/// (player, open count) of the active list.
 unsafe fn active_players(system: usize) -> Vec<(usize, i32)> {
     let count: usize = unsafe { read(system + ACTIVE_COUNT) };
     let base = (system + ACTIVE_LIST + 7) & !7;
@@ -357,7 +327,6 @@ fn scan_package() -> Option<HashMap<PathBuf, (SystemTime, u64)>> {
     Some(files)
 }
 
-/// F7: changed package files -> their menus are released at the next lookup.
 fn reload_changed() {
     let Some(now) = scan_package() else {
         log("F7: no package configured (gfx_reloader.ini: package = ...)");
@@ -397,9 +366,7 @@ fn reload_changed() {
 
 // ---- game-thread work (runs inside the lookup hook) -----------------------------------------------------------------
 
-/// Drops the cache's reference to a movie the way the game releases these wrappers (atomic decrement of the
-/// refcount at +8; at zero, vtable slot 0 destroys it) and empties the entry, so the next lookup loads it again.
-/// The old movie must really go: Scaleform's library hands a still-alive MovieDef back for an unchanged path+mtime.
+/// Must really free the movie, or Scaleform hands it back for an unchanged path + mtime.
 unsafe fn release_cached(system: usize, name: &str) {
     let Some(node) = (unsafe { map_find(system, CACHE_MAP_HEAD, name) }) else {
         log(&format!("release {name}: not in the movie cache (non-resident: every lookup loads it anyway)"));
@@ -426,23 +393,20 @@ unsafe fn release_cached(system: usize, name: &str) {
 
 type MenuPathFn = unsafe extern "system" fn(*mut u8, usize) -> usize;
 type RepositoryLookupFn = unsafe extern "system" fn(usize, *const u16) -> usize;
-/// The in-memory file repository the game's Scaleform OpenFile reads first; lookup by wchar path -> entry.
 const REPOSITORY_PTR: usize = 0x144e245b0;
-const REPOSITORY_LOOKUP_ADDR: usize = 0x14153d3d0;
-/// (out string object, table entry) -> string object with the menu's wchar path at +8 ("menu:/%s.gfx").
+const REPOSITORY_LOOKUP_ADDR: usize = 0x14153d3d0; // (repository, wchar path) -> entry
+/// (out string, table entry), wchar path at +8.
 const MENU_PATH_ADDR: usize = 0x14160a5b0;
 
-/// Drops leftover repository entries for a menu's file. Boot requests some files twice (01_900_Black,
-/// 01_070_CommandList), opens them once, and the second copy stays in the repository with the already-used file
-/// object; a reload would get that instead of a disk miss and the game dies in the load. The game's own release
-/// (0x1416040c0, what OpenFile calls after opening from the repository) drops one reference per call.
+/// Boot requests some files twice (01_900_Black, 01_070_CommandList) and opens them once; the used leftover entry
+/// crashes a reload. Release drops one reference per call.
 unsafe fn purge_repository(system: usize, name: &str) {
     let repository: usize = unsafe { read(REPOSITORY_PTR) };
     if repository == 0 {
         return;
     }
     let Some(index) = menu_names().iter().position(|n| n == name) else { return };
-    // the game's string object: a generous zeroed buffer, leaked (a few bytes per reload)
+    // game string object, oversized and leaked
     let buffer = Box::leak(vec![0u8; 0x200].into_boxed_slice());
     let make_path: MenuPathFn = unsafe { std::mem::transmute(MENU_PATH_ADDR) };
     unsafe { make_path(buffer.as_mut_ptr(), MENU_TABLE + index * 16) };
@@ -487,7 +451,7 @@ unsafe fn dump_state(system: usize) {
         }
         let started: u8 = unsafe { read(player + PLAYER_STARTED) };
         let opens = active.iter().find(|(p, _)| *p == player).map(|(_, c)| *c);
-        // Where the player keeps the movie: fields equal to the cached wrapper or to one of its fields.
+        // player fields pointing at the wrapper or its fields
         let mut refs = Vec::new();
         if let Some(&wrapper) = wrappers.get(name) {
             if wrapper != 0 {
@@ -523,9 +487,7 @@ unsafe fn dump_state(system: usize) {
     log("==== end of dump ====");
 }
 
-/// F10 (break test): closes every active player with the game's own close (once per open count) and releases every
-/// cached movie. The menu windows still hold their player pointers, movie instances and controllers, so expected:
-/// the menus vanish, nothing reloads by itself, and a window's later close hits a dangling player.
+/// F10 break test: windows keep dangling players afterwards.
 static NUKE_PENDING: AtomicBool = AtomicBool::new(false);
 
 unsafe fn nuke_players(system: usize) {
@@ -600,12 +562,7 @@ unsafe extern "system" fn open_menu_hook(system: usize, entry: usize, flag: usiz
     player
 }
 
-/// Main-menu window step. A live window (controller set) with a pending reload is closed with its own close first;
-/// the original step then finds no controller and reopens it in the same frame, through a fresh movie lookup (where
-/// the pending cache release runs, so the movie is read from disk).
-/// Panel windows: the owner reaches the panel's movie through window+8 each time (0x140c8a8c0, which also opens a
-/// closed panel lazily), and the game itself swaps a panel's movie by closing it (0x140c8a6b0). So a reload is the
-/// panel's own close + open; open rebinds window+8 to the new movie instance. Runs on the game thread.
+/// Game thread. Own close + open, as the game swaps a panel's movie (0x140c8a6b0); open rebinds window+8.
 unsafe fn reload_pending_panels() {
     let pending = std::mem::take(&mut *PENDING_PANEL_RELOAD.lock().unwrap());
     if pending.is_empty() {
@@ -633,8 +590,7 @@ unsafe fn reload_pending_panels() {
             unsafe { read::<usize>(window + PANEL_PLAYER) },
             unsafe { read::<usize>(window + PANEL_MOVIE) }
         ));
-        // The panel's owner (a C++ view object) took handles into the old movie when it was built (02_PilotData:
-        // "PilotData", "ArenaRankIcon"...), so it keeps writing there: the reloaded panel is a preview of the art.
+        // the owner keeps handles into the old movie: preview only
         let rebuild = if PERSISTENT_PANELS.iter().any(|p| p.eq_ignore_ascii_case(&name)) {
             "only on return to the title screen (its owner survives mission loads)"
         } else {
@@ -647,6 +603,7 @@ unsafe fn reload_pending_panels() {
     }
 }
 
+/// Live window with a pending reload: own close, then the original step reopens it.
 unsafe extern "system" fn window_step_hook(window: usize, out: usize, p3: usize, p4: usize) -> usize {
     unsafe { reload_pending_panels() };
     let name_ptr: usize = unsafe { read(window + MAIN_WINDOW_NAME) };
@@ -664,12 +621,9 @@ unsafe extern "system" fn window_step_hook(window: usize, out: usize, p3: usize,
                 log(&format!(
                     "window reload {name}: window {window:#x}, closing (player {player:#x}, controller {controller:#x}, command {command:#x})"
                 ));
-                // +0xf0..+0x130 is an MSVC std::function (inline storage +0xf0, impl pointer +0x128): the job's
-                // "should this menu close" check (0x140d62120 for the garage top menu, asks CSMenuMan). The close
-                // destroys it and the reopen never sets it again, so keep it out of the close and put it back.
+                // +0xf0 std::function close check (e.g. 0x140d62120): the close destroys it, the reopen never sets
+                // it again. Known safe only when inline and wrapping a plain function pointer.
                 let callable: usize = unsafe { read(window + 0xf8) };
-                // Only the simple kind is known safe to keep: stored inline (impl = window+0xf0) and wrapping a plain
-                // function pointer. Anything else may capture state that the close frees.
                 if command != 0 {
                     let function_vtable: usize = unsafe { read(command) };
                     if command != window + 0xf0 || function_vtable != FN_POINTER_FUNCTION_VTABLE {
@@ -716,7 +670,6 @@ unsafe extern "system" fn close_menu_hook(system: usize, player: usize) -> usize
     unsafe { orig(system, player) }
 }
 
-/// Name of a menu window's table entry copy (+0x48, name pointer +0x50).
 unsafe fn window_name(window: usize) -> String {
     let ptr: usize = unsafe { read(window + 0x50) };
     if ptr == 0 { "<none>".into() } else { unsafe { wide_str(ptr as *const u16, 128) } }
@@ -826,7 +779,7 @@ unsafe extern "system" fn log_message_hook(this: usize, id: u32, fmt: *const u8,
     unsafe { orig(this, id, fmt, args) };
 }
 
-/// Replaces slot 1 (LogMessageVarg) of the game's Scaleform log object's vtable (the game drops these messages).
+/// Slot 1 = LogMessageVarg; the game drops these messages.
 unsafe fn hook_scaleform_log(system: usize) {
     let loader: usize = unsafe { read(system + SYSTEM_LOADER) };
     let log_object: usize = if loader != 0 { unsafe { read(loader + LOADER_LOG) } } else { 0 };
@@ -895,7 +848,6 @@ fn key_loop() {
     }
 }
 
-/// `gfx_reloader.ini` next to the DLL or in one of its parent folders.
 fn load_config(dll_path: &Path) -> Config {
     let mut config = Config { package: None, fallback_at_boot: false, source: "no gfx_reloader.ini found".into() };
     let Some(file) = dll_path.ancestors().skip(1).map(|d| d.join("gfx_reloader.ini")).find(|p| p.is_file()) else {
@@ -909,7 +861,6 @@ fn load_config(dll_path: &Path) -> Config {
         }
         let Some((key, value)) = line.split_once('=') else { continue };
         match key.trim() {
-            // a relative path is relative to the ini's folder
             "package" => config.package = Some(file.parent().unwrap_or(Path::new(".")).join(value.trim())),
             "disk_fallback" => config.fallback_at_boot = value.trim().eq_ignore_ascii_case("boot"),
             _ => {}

@@ -1,5 +1,4 @@
-"""Fills a test package with every stock menu movie from a game's unpacked menu folder, so any menu can be edited
-mid-session (me3 only serves package files that existed at launch). Also restores everything to stock.
+"""Fills (or resets) the test package with every stock menu movie; me3 only serves files present at launch.
 
     python -I tools/make_test_package.py              # Armored Core VI -> tests/mod/menu
     python -I tools/make_test_package.py --game er    # Elden Ring       -> tests/mod-er/menu
@@ -7,7 +6,7 @@ mid-session (me3 only serves package files that existed at launch). Also restore
 import argparse, os, shutil, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # -I leaves the script's folder out
-from tint import GAMES  # game -> (unpacked stock menu folder, test package menu folder)
+from tint import GAMES
 
 
 def main():
